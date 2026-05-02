@@ -1,0 +1,79 @@
+{% extends "base.html" %}{% block title %}{{ anime.title }}{% endblock %}
+{% block content %}
+<div class="flex items-center gap-2 mb-3">
+<a href="/anime" class="text-gray-500 hover:text-gray-300 text-sm">← Anime</a>
+<span class="text-gray-600 text-xs">/</span>
+<span class="text-gray-300 text-sm truncate">{{ anime.title }}</span>
+</div>
+
+<!-- Anime Info -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
+<div class="flex flex-col sm:flex-row gap-4">
+{% if anime.image %}
+<img src="{{ anime.image }}" alt="{{ anime.title }}" class="w-32 h-44 sm:w-36 sm:h-48 object-cover rounded-lg flex-shrink-0 mx-auto sm:mx-0">
+{% endif %}
+<div class="min-w-0 flex-1">
+<h2 class="text-base sm:text-lg font-bold text-white mb-2">{{ anime.title }}</h2>
+
+<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] mb-3">
+<div><span class="text-gray-500">Type:</span> <span class="text-gray-300">{{ anime.type or "?" }}</span></div>
+<div><span class="text-gray-500">Status:</span> <span class="{% if anime.status == 'Ongoing' %}text-emerald-400{% else %}text-blue-400{% endif %}">{{ anime.status or "?" }}</span></div>
+<div><span class="text-gray-500">Score:</span> <span class="text-amber-400">⭐ {{ anime.score or "-" }}</span></div>
+<div><span class="text-gray-500">Studio:</span> <span class="text-gray-300">{{ anime.studio or "-" }}</span></div>
+<div><span class="text-gray-500">Episodes:</span> <span class="text-gray-300">{{ anime.total_episodes or anime.episodes|length or "?" }}</span></div>
+<div><span class="text-gray-500">Duration:</span> <span class="text-gray-300">{{ anime.duration or "-" }}</span></div>
+{% if anime.day %}
+<div><span class="text-gray-500">Hari:</span> <span class="text-indigo-400">{{ anime.day }}</span></div>
+{% endif %}
+</div>
+
+{% if anime.genres %}
+<div class="flex flex-wrap gap-1 mb-3">
+{% for g in anime.genres %}
+<span class="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-[9px] text-gray-400">{{ g }}</span>
+{% endfor %}
+</div>
+{% endif %}
+
+{% if anime.synopsis %}
+<p class="text-[11px] text-gray-500 leading-relaxed">{{ anime.synopsis[:300] }}{% if anime.synopsis|length > 300 %}...{% endif %}</p>
+{% endif %}
+</div>
+</div>
+</div>
+
+<!-- Episode List -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="text-xs font-medium text-gray-300">📺 Episode List ({{ anime.episodes|length }})</div>
+<div class="text-[10px] text-gray-500">Klik untuk nonton</div>
+</div>
+
+<div class="space-y-1">
+{% for ep in anime.episodes %}
+<div class="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-gray-800/50 transition-colors {% if ep.watched %}opacity-60{% endif %}">
+<div class="flex items-center gap-2 min-w-0 flex-1">
+{% if ep.watched %}
+<span class="text-emerald-500 text-xs flex-shrink-0">✓</span>
+{% else %}
+<span class="text-gray-600 text-xs flex-shrink-0">○</span>
+{% endif %}
+<a href="/watch?url={{ ep.url|urlencode }}" 
+   class="text-[11px] {% if ep.watched %}text-gray-500 line-through{% else %}text-indigo-400 hover:text-indigo-300{% endif %} truncate">
+{{ ep.text }}
+</a>
+</div>
+<div class="flex items-center gap-2 flex-shrink-0 ml-2">
+<span class="text-[9px] text-gray-600">{{ ep.date }}</span>
+<a href="/watch?url={{ ep.url|urlencode }}" class="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] rounded">▶ Play</a>
+<a href="{{ ep.url }}" target="_blank" class="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px] rounded">↗</a>
+</div>
+</div>
+{% endfor %}
+</div>
+
+{% if not anime.episodes %}
+<div class="text-center py-8 text-gray-500 text-sm">Belum ada episode tersedia.</div>
+{% endif %}
+</div>
+{% endblock %}

@@ -49,6 +49,14 @@ SERVICES = {
         "latest_file": "latest.json",
         "source": "komiku",
     },
+    "otakudesu-scraper": {
+        "name": "Otakudesu",
+        "desc": "Scrape ongoing anime dari otakudesu.blog",
+        "config_path": SERVICES_DIR / "otakudesu-scraper" / "config.yaml",
+        "output_path": SERVICES_DIR / "otakudesu-scraper" / "output",
+        "latest_file": "latest.json",
+        "source": "otakudesu",
+    },
 }
 
 # ── Rate Limiter ────────────────────────────────────────
@@ -849,6 +857,362 @@ async def history_page(request: Request):
     return tpl.TemplateResponse(request, "history.html", context={
         "user": user, "page": "history", "services": get_all_services(),
         "history": history,
+    })
+
+
+# ══════════════════════════════════════════════════════════
+# ── ANIME SECTION ────────────────────────────────────────
+# ══════════════════════════════════════════════════════════
+
+@app.get("/anime", response_class=HTMLResponse)
+async def anime_page(request: Request):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    db = get_db()
+    try:
+        rows = db.execute("SELECT * FROM anime ORDER BY updated_at DESC").fetchall()
+        anime_list = []
+        for r in rows:
+            a = dict(r)
+            a["genres"] = json.loads(a["genres"]) if a["genres"] else []
+            # Get episode count
+            ep_count = db.execute("SELECT COUNT(*) FROM anime_episodes WHERE anime_id=?", (a["id"],)).fetchone()[0]
+            a["ep_count"] = ep_count
+            # Get day from last scrape data if not in DB
+            if not a.get("day"):
+                a["day"] = ""
+            anime_list.append(a)
+        total_anime = len(anime_list)
+        total_episodes = db.execute("SELECT COUNT(*) FROM anime_episodes").fetchone()[0]
+    finally:
+        db.close()
+    return tpl.TemplateResponse(request, "anime.html", context={
+        "user": user, "page": "anime", "services": get_all_services(),
+        "anime_list": anime_list, "total_anime": total_anime, "total_episodes": total_episodes,
+    })
+
+
+@app.get("/api/anime/{anime_id}")
+async def api_anime_detail(request: Request, anime_id: int):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    db = get_db()
+    try:
+        row = db.execute("SELECT * FROM anime WHERE id=?", (anime_id,)).fetchone()
+        if not row:
+            return JSONResponse({"error": "not found"}, 404)
+        data = dict(row)
+        data["genres"] = json.loads(data["genres"]) if data["genres"] else []
+        episodes = db.execute(
+            "SELECT * FROM anime_episodes WHERE anime_id=? ORDER BY id ASC",
+            (anime_id,)
+        ).fetchall()
+        data["episodes"] = [dict(e) for e in episodes]
+    finally:
+        db.close()
+    return JSONResponse(data)
+
+
+@app.get("/watch", response_class=HTMLResponse)
+async def watch_page(request: Request, url: str = Query("")):
+    """Anime player — scrape episode page on-demand and show video player."""
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+
+    if not url:
+        return tpl.TemplateResponse(request, "watch.html", context={
+            "user": user, "page": "anime", "services": get_all_services(),
+            "error": "URL episode tidak diberikan.",
+        })
+
+    import httpx as _httpx
+    import base64 as _b64
+    import re as _re
+    from bs4 import BeautifulSoup as _BS
+
+    try:
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        async with _httpx.AsyncClient(headers={"User-Agent": ua, "Accept-Language": "id-ID,id;q=0.9"}, follow_redirects=True) as client:
+            r = await client.get(url, timeout=20)
+            html = r.text if r.status_code == 200 else None
+
+        if not html:
+            return tpl.TemplateResponse(request, "watch.html", context={
+                "user": user, "page": "anime", "services": get_all_services(),
+                "error": f"Gagal fetch halaman episode: {url}",
+            })
+
+        # Parse episode page inline
+        soup = _BS(html, "html.parser")
+        ep_data = {"title": "", "mirrors": {}, "downloads": [], "prev_url": "", "next_url": "",
+                   "all_episodes_url": "", "nonce_action": "", "mirror_action": "", "default_iframe": ""}
+
+        title_el = soup.select_one("h1.posttl")
+        if title_el:
+            ep_data["title"] = title_el.get_text(strip=True)
+
+        iframe = soup.select_one(".responsive-embed-stream iframe")
+        if iframe:
+            ep_data["default_iframe"] = iframe.get("src", "")
+
+        # Mirrors
+        mirror_stream = soup.select_one(".mirrorstream")
+        if mirror_stream:
+            for ul in mirror_stream.select("ul"):
+                quality = "unknown"
+                for cls in ul.get("class", []):
+                    if cls.startswith("m") and cls[1:].rstrip("p").isdigit():
+                        quality = cls[1:]
+                        break
+                mirrors = []
+                for a in ul.select("li a"):
+                    data_content = a.get("data-content", "")
+                    decoded = {}
+                    if data_content:
+                        try:
+                            decoded = json.loads(_b64.b64decode(data_content).decode())
+                        except Exception:
+                            pass
+                    mirrors.append({
+                        "server": a.get_text(strip=True),
+                        "data_content": data_content,
+                        "decoded": decoded,
+                        "default": a.get("data-default") == "true",
+                    })
+                if mirrors:
+                    ep_data["mirrors"][quality] = mirrors
+
+        # Downloads
+        download_div = soup.select_one(".download")
+        if download_div:
+            for ul in download_div.select("ul"):
+                for li in ul.select("li"):
+                    strong = li.select_one("strong")
+                    if not strong:
+                        continue
+                    size_el = li.select_one("i")
+                    links = [{"host": a.get_text(strip=True), "url": a.get("href", "")} for a in li.select("a")]
+                    if links:
+                        ep_data["downloads"].append({
+                            "quality": strong.get_text(strip=True),
+                            "size": size_el.get_text(strip=True) if size_el else "",
+                            "links": links,
+                        })
+
+        # Navigation
+        for a in soup.select(".prevnext .flir a"):
+            text = a.get_text(strip=True).lower()
+            href = a.get("href", "")
+            if "previous" in text or "sebelum" in text:
+                ep_data["prev_url"] = href
+            elif "all" in text or "semua" in text:
+                ep_data["all_episodes_url"] = href
+            elif "next" in text or "selanjut" in text:
+                ep_data["next_url"] = href
+
+        # AJAX actions
+        for script in soup.select("script"):
+            script_text = script.string or ""
+            if "admin-ajax" in script_text:
+                actions = _re.findall(r'action\s*:\s*["\']([a-f0-9]{32})["\']', script_text)
+                if len(actions) >= 2:
+                    ep_data["nonce_action"] = actions[0]
+                    ep_data["mirror_action"] = actions[1]
+
+        # Try to find anime info from DB
+        anime_info = None
+        anime_url = ""
+        anime_title = ""
+        if ep_data.get("all_episodes_url"):
+            anime_url = ep_data["all_episodes_url"]
+            db = get_db()
+            try:
+                row = db.execute("SELECT * FROM anime WHERE url=?", (anime_url,)).fetchone()
+                if row:
+                    anime_info = dict(row)
+                    anime_info["genres"] = json.loads(anime_info["genres"]) if anime_info["genres"] else []
+                    anime_title = anime_info["title"]
+            finally:
+                db.close()
+
+        # Mark as watched in DB
+        if ep_data.get("title"):
+            db = get_db()
+            try:
+                ep_row = db.execute(
+                    "SELECT ae.id FROM anime_episodes ae WHERE ae.url=?", (url,)
+                ).fetchone()
+                if ep_row:
+                    db.execute(
+                        "INSERT OR IGNORE INTO anime_watch_status (episode_id) VALUES (?)",
+                        (ep_row["id"],)
+                    )
+                    db.commit()
+            except Exception:
+                pass
+            finally:
+                db.close()
+
+        return tpl.TemplateResponse(request, "watch.html", context={
+            "user": user, "page": "anime", "services": get_all_services(),
+            "title": ep_data.get("title", "Episode"),
+            "iframe_url": ep_data.get("default_iframe", ""),
+            "mirrors": ep_data.get("mirrors", {}),
+            "downloads": ep_data.get("downloads", []),
+            "prev_url": ep_data.get("prev_url", ""),
+            "next_url": ep_data.get("next_url", ""),
+            "all_episodes_url": ep_data.get("all_episodes_url", ""),
+            "nonce_action": ep_data.get("nonce_action", ""),
+            "mirror_action": ep_data.get("mirror_action", ""),
+            "ajax_url": "https://otakudesu.blog/wp-admin/admin-ajax.php",
+            "anime_info": anime_info,
+            "anime_url": anime_url,
+            "anime_title": anime_title,
+            "error": None,
+        })
+
+    except Exception as e:
+        return tpl.TemplateResponse(request, "watch.html", context={
+            "user": user, "page": "anime", "services": get_all_services(),
+            "error": f"Error: {e}",
+        })
+
+
+@app.post("/api/anime/mirror")
+async def api_anime_mirror(request: Request):
+    """Proxy mirror switch AJAX call through our server (CORS bypass)."""
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+
+    import httpx as _httpx
+    import base64 as _b64
+
+    try:
+        body = await request.json()
+        data_content = body.get("data_content", "")
+        if not data_content:
+            return JSONResponse({"error": "missing data_content"}, 400)
+
+        decoded = json.loads(_b64.b64decode(data_content).decode())
+        ajax_url = "https://otakudesu.blog/wp-admin/admin-ajax.php"
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        headers = {"User-Agent": ua, "Referer": "https://otakudesu.blog/"}
+
+        async with _httpx.AsyncClient(headers=headers) as client:
+            # Step 1: Get nonce
+            nonce_r = await client.post(ajax_url, data={
+                "action": "aa1208d27f29ca340c92c66d1926f13f"
+            })
+            nonce_data = nonce_r.json()
+            nonce = nonce_data.get("data", "")
+
+            # Step 2: Get embed
+            embed_r = await client.post(ajax_url, data={
+                "id": decoded["id"],
+                "i": decoded["i"],
+                "q": decoded["q"],
+                "nonce": nonce,
+                "action": "2a3505c93b0035d3f455df82bf976b84",
+            })
+            embed_data = embed_r.json()
+            embed_html = _b64.b64decode(embed_data.get("data", "")).decode()
+
+            # Extract iframe src
+            from bs4 import BeautifulSoup as _BS
+            soup = _BS(embed_html, "html.parser")
+            iframe = soup.select_one("iframe")
+            iframe_url = iframe.get("src", "") if iframe else ""
+
+            return JSONResponse({"iframe_url": iframe_url, "html": embed_html})
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, 500)
+
+
+@app.get("/anime/detail", response_class=HTMLResponse)
+async def anime_detail_page(request: Request, url: str = Query("")):
+    """Anime detail page — show all episodes from DB or scrape on-demand."""
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+
+    if not url:
+        return RedirectResponse("/anime", 302)
+
+    db = get_db()
+    try:
+        row = db.execute("SELECT * FROM anime WHERE url=?", (url,)).fetchone()
+        if row:
+            anime = dict(row)
+            anime["genres"] = json.loads(anime["genres"]) if anime["genres"] else []
+            episodes = db.execute(
+                "SELECT ae.*, CASE WHEN aws.id IS NOT NULL THEN 1 ELSE 0 END as watched "
+                "FROM anime_episodes ae "
+                "LEFT JOIN anime_watch_status aws ON ae.id=aws.episode_id "
+                "WHERE ae.anime_id=? ORDER BY ae.id DESC",
+                (anime["id"],)
+            ).fetchall()
+            anime["episodes"] = [dict(e) for e in episodes]
+        else:
+            # Scrape on-demand
+            import httpx as _httpx
+            from bs4 import BeautifulSoup as _BS
+
+            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            async with _httpx.AsyncClient(headers={"User-Agent": ua}, follow_redirects=True) as client:
+                r = await client.get(url, timeout=20)
+                html = r.text if r.status_code == 200 else None
+            if not html:
+                return RedirectResponse("/anime", 302)
+
+            anime = {"title": "", "url": url, "image": "", "episodes": [], "genres": [],
+                     "type": "", "status": "", "score": "", "studio": "", "synopsis": "",
+                     "total_episodes": "", "duration": "", "day": ""}
+
+            soup = _BS(html, "html.parser")
+            for p in soup.select(".infozingle p"):
+                span = p.select_one("span")
+                if not span: continue
+                b = span.select_one("b")
+                if not b: continue
+                label = b.get_text(strip=True).lower().rstrip(":")
+                value = span.get_text(strip=True).replace(b.get_text(), "").strip().lstrip(":").strip()
+                if "skor" == label: anime["score"] = value
+                elif "tipe" == label: anime["type"] = value
+                elif "status" == label: anime["status"] = value
+                elif "total episode" == label: anime["total_episodes"] = value
+                elif "durasi" == label: anime["duration"] = value
+                elif "studio" == label: anime["studio"] = value
+            anime["genres"] = [a.get_text(strip=True) for a in soup.select(".infozingle a[rel='tag']")]
+            sinopc = soup.select_one(".sinopc")
+            if sinopc: anime["synopsis"] = sinopc.get_text(strip=True)[:500]
+            cover = soup.select_one(".fotoanime img")
+            if cover and cover.get("src"): anime["image"] = cover["src"]
+            title_el = soup.select_one(".jdlrx h1")
+            if title_el: anime["title"] = title_el.get_text(strip=True)
+
+            episodes = []
+            for ep_div in soup.select(".episodelist"):
+                header = ep_div.select_one(".monktit")
+                if header:
+                    ht = header.get_text(strip=True).lower()
+                    if "batch" in ht or "lengkap" in ht: continue
+                for li in ep_div.select("ul li"):
+                    ep_link = li.select_one("span a")
+                    ep_date = li.select_one(".zeebr") or li.select_one(".zebr")
+                    if ep_link:
+                        episodes.append({
+                            "text": ep_link.get_text(strip=True),
+                            "url": ep_link.get("href", ""),
+                            "date": ep_date.get_text(strip=True) if ep_date else "",
+                            "watched": 0,
+                        })
+            anime["episodes"] = list(reversed(episodes))
+    finally:
+        db.close()
+
+    return tpl.TemplateResponse(request, "anime_detail.html", context={
+        "user": user, "page": "anime", "services": get_all_services(),
+        "anime": anime,
     })
 
 

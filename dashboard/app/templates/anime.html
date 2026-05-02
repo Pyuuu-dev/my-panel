@@ -1,0 +1,121 @@
+{% extends "base.html" %}{% block title %}Anime{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-1">
+<h2 class="text-lg sm:text-xl font-bold text-white">🎬 Ongoing Anime</h2>
+<div class="text-[10px] text-gray-500">{{ total_anime }} anime • {{ total_episodes }} episodes</div>
+</div>
+<p class="text-gray-500 text-xs mb-4">Anime ongoing dari Otakudesu — klik untuk lihat episode & nonton</p>
+
+<!-- Search -->
+<div class="mb-4">
+<input type="text" id="anime-search" placeholder="Cari anime..." 
+       class="w-full px-3 py-2 bg-gray-900 border border-gray-800 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+       oninput="filterAnime(this.value)">
+</div>
+
+<!-- Anime Grid -->
+<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3" id="anime-grid">
+{% for a in anime_list %}
+<div class="anime-card bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-indigo-500/50 transition-colors cursor-pointer"
+     data-title="{{ a.title|lower }}" onclick="showAnimeDetail({{ a.id }})">
+<div class="relative">
+<img src="{{ a.image }}" alt="{{ a.title }}" class="w-full h-44 sm:h-52 object-cover" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 140%22><rect fill=%22%231f2937%22 width=%22100%22 height=%22140%22/><text x=%2250%22 y=%2270%22 text-anchor=%22middle%22 fill=%22%234b5563%22 font-size=%2212%22>No Image</text></svg>'">
+<!-- Episode badge -->
+<div class="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-indigo-600/90 text-white text-[9px] rounded font-medium">
+{{ a.last_episode or a.episode or "?" }}
+</div>
+<!-- Day badge -->
+{% if a.day %}
+<div class="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-black/70 text-gray-300 text-[9px] rounded">
+{{ a.day }}
+</div>
+{% endif %}
+<!-- Score -->
+{% if a.score %}
+<div class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 bg-amber-500/90 text-white text-[9px] rounded font-medium">
+⭐ {{ a.score }}
+</div>
+{% endif %}
+</div>
+<div class="p-2">
+<h3 class="text-[11px] font-medium text-white line-clamp-2 leading-tight">{{ a.title }}</h3>
+<div class="text-[9px] text-gray-500 mt-1">{{ a.type }} • {{ a.studio or "?" }}</div>
+</div>
+</div>
+{% endfor %}
+</div>
+
+{% if not anime_list %}
+<div class="bg-gray-900 border border-gray-800 border-dashed rounded-xl p-8 text-center">
+<div class="text-3xl mb-2">🎬</div>
+<p class="text-gray-500 text-sm">Belum ada data anime. Tunggu scraper selesai.</p>
+</div>
+{% endif %}
+
+<!-- Anime Detail Modal -->
+<div id="anime-modal" class="fixed inset-0 z-50 hidden" onclick="if(event.target===this)closeAnimeModal()">
+<div class="absolute inset-0 bg-black/60"></div>
+<div class="relative mx-auto mt-10 sm:mt-16 w-[95%] max-w-2xl max-h-[80vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-5" id="anime-modal-content">
+<button onclick="closeAnimeModal()" class="absolute top-3 right-3 text-gray-500 hover:text-white text-lg">✕</button>
+<div id="anime-modal-body">Loading...</div>
+</div>
+</div>
+
+<script>
+function filterAnime(q){
+  q = q.toLowerCase();
+  document.querySelectorAll('.anime-card').forEach(c=>{
+    c.style.display = c.dataset.title.includes(q) ? '' : 'none';
+  });
+}
+
+async function showAnimeDetail(id){
+  document.getElementById('anime-modal').classList.remove('hidden');
+  document.getElementById('anime-modal-body').innerHTML = '<div class="text-center py-8 text-gray-500">Loading...</div>';
+  try{
+    const r = await fetch(`/api/anime/${id}`);
+    const d = await r.json();
+    if(d.error){
+      document.getElementById('anime-modal-body').innerHTML = `<div class="text-red-400">${d.error}</div>`;
+      return;
+    }
+    let genres = (d.genres||[]).map(g=>`<span class="px-1.5 py-0.5 bg-gray-800 rounded text-[9px] text-gray-400">${g}</span>`).join(' ');
+    let eps = (d.episodes||[]).map((ep,i)=>`
+      <div class="ep-item flex items-center justify-between py-1.5 px-2 rounded ${i===d.episodes.length-1?'current':''}">
+        <a href="/watch?url=${encodeURIComponent(ep.url)}" class="text-[11px] text-indigo-400 hover:text-indigo-300 truncate flex-1">${ep.text}</a>
+        <span class="text-[9px] text-gray-600 ml-2 flex-shrink-0">${ep.date||''}</span>
+      </div>
+    `).reverse().join('');
+
+    document.getElementById('anime-modal-body').innerHTML = `
+      <div class="flex gap-3 mb-4">
+        <img src="${d.image||''}" class="w-24 h-32 sm:w-28 sm:h-36 object-cover rounded-lg flex-shrink-0" onerror="this.style.display='none'">
+        <div class="min-w-0">
+          <h3 class="text-sm sm:text-base font-bold text-white mb-1">${d.title}</h3>
+          <div class="text-[10px] text-gray-400 space-y-0.5">
+            <div><b>Type:</b> ${d.type||'?'} • <b>Status:</b> ${d.status||'?'}</div>
+            <div><b>Score:</b> ⭐ ${d.score||'-'} • <b>Studio:</b> ${d.studio||'-'}</div>
+            <div><b>Episodes:</b> ${d.total_episodes||d.episodes?.length||'?'} • <b>Duration:</b> ${d.duration||'?'}</div>
+            <div><b>Hari:</b> ${d.day||'-'}</div>
+          </div>
+          <div class="flex flex-wrap gap-1 mt-2">${genres}</div>
+        </div>
+      </div>
+      ${d.synopsis?`<div class="text-[10px] text-gray-500 mb-3 line-clamp-3">${d.synopsis}</div>`:''}
+      <div class="text-xs font-medium text-gray-300 mb-2">📺 Episodes (${d.episodes?.length||0})</div>
+      <div class="max-h-60 overflow-y-auto space-y-0.5 bg-gray-800/30 rounded-lg p-1">
+        ${eps||'<div class="text-center py-4 text-gray-500 text-xs">Belum ada episode</div>'}
+      </div>
+    `;
+  }catch(e){
+    document.getElementById('anime-modal-body').innerHTML = `<div class="text-red-400">Error: ${e.message}</div>`;
+  }
+}
+
+function closeAnimeModal(){
+  document.getElementById('anime-modal').classList.add('hidden');
+}
+
+document.addEventListener('keydown', e=>{if(e.key==='Escape')closeAnimeModal()});
+</script>
+{% endblock %}
