@@ -385,17 +385,48 @@ def build_anime_embed(anime: dict) -> dict:
     return embed
 
 
+# ── Domain Fallback ─────────────────────────────────────
+OTAKUDESU_DOMAINS = [
+    "https://otakudesu.blog",
+    "https://otakudesu.cloud",
+    "https://otakudesu.moe",
+    "https://otakudesu.lol",
+    "https://otakudesu.cam",
+    "https://otakudesu.skin",
+]
+
+
+async def detect_active_domain(ua: str) -> str:
+    """Try each domain until one responds. Returns working base_url."""
+    async with httpx.AsyncClient(headers={"User-Agent": ua}, follow_redirects=True) as client:
+        for domain in OTAKUDESU_DOMAINS:
+            try:
+                r = await client.get(f"{domain}/ongoing-anime/", timeout=10)
+                if r.status_code == 200 and ".venz" in r.text[:5000]:
+                    logger.info(f"Active domain found: {domain}")
+                    return domain
+                # Check if redirected to different domain
+                if r.status_code == 200:
+                    final_url = str(r.url)
+                    base = final_url.split("/ongoing-anime")[0]
+                    if base != domain:
+                        logger.info(f"Domain {domain} redirected to {base}")
+                        return base
+            except Exception:
+                continue
+    return OTAKUDESU_DOMAINS[0]  # fallback
+
+
 # ── Main Scraper ────────────────────────────────────────
 async def main():
     config = load_config()
     scraper_cfg = config.get("scraper", {})
-    base_url = scraper_cfg.get("base_url", "https://otakudesu.blog")
+    configured_url = scraper_cfg.get("base_url", "https://otakudesu.blog")
     max_pages = scraper_cfg.get("max_pages", 3)
     detail_limit = scraper_cfg.get("detail_limit", 20)
     delay = scraper_cfg.get("delay", 2)
     ua = scraper_cfg.get("user_agent", "Mozilla/5.0")
 
-    watchlist = [w.lower() for w in config.get("watchlist", [])]
     webhook_url = config.get("discord", {}).get("webhook_url", "")
     webhook_cfg = config.get("discord", {})
 
@@ -403,7 +434,24 @@ async def main():
 
     prev_state = load_json(STATE_FILE)
 
-    logger.info(f"Starting scrape (otakudesu.blog, {max_pages} pages, {len(watchlist)} watchlist)")
+    # Load watchlist from DB bookmarks (unified with dashboard)
+    sys.path.insert(0, "/opt/services/shared")
+    from db import get_db, get_bookmarked_anime_titles, upsert_anime, upsert_anime_episodes, log_scrape_run
+
+    db = get_db()
+    watchlist = get_bookmarked_anime_titles(db)
+    db.close()
+
+    # Also include config watchlist as fallback
+    config_watchlist = [w.lower() for w in config.get("watchlist", [])]
+    watchlist = list(set(watchlist + config_watchlist))
+
+    # Detect active domain (otakudesu sering ganti domain)
+    base_url = await detect_active_domain(ua)
+    if base_url != configured_url:
+        logger.info(f"Domain changed: {configured_url} → {base_url}")
+
+    logger.info(f"Starting scrape ({base_url}, {max_pages} pages, {len(watchlist)} watchlist)")
 
     # Phase 1: Fetch ongoing anime list
     all_results = []
@@ -437,9 +485,20 @@ async def main():
             return 0
 
         # Phase 2: Fetch detail pages
-        logger.info(f"Fetching detail for up to {detail_limit} anime...")
-        fetched = 0
+        # Priority: bookmarked anime first, then rest
+        bookmarked_set = set(watchlist)
+        priority_queue = []
+        rest_queue = []
         for anime in all_results:
+            if anime["title"].lower() in bookmarked_set:
+                priority_queue.append(anime)
+            else:
+                rest_queue.append(anime)
+        detail_queue = priority_queue + rest_queue
+
+        logger.info(f"Fetching detail for up to {detail_limit} anime ({len(priority_queue)} bookmarked first)...")
+        fetched = 0
+        for anime in detail_queue:
             if fetched >= detail_limit:
                 break
             detail_html = await fetch(client, anime["url"])
@@ -447,6 +506,8 @@ async def main():
                 parse_detail_page(detail_html, anime)
                 fetched += 1
                 logger.info(f"  Detail: {anime['title']} ({len(anime['episodes'])} eps)")
+            else:
+                logger.warning(f"  Failed: {anime['title']}")
             await asyncio.sleep(delay)
 
     # Phase 3: Detect changes
@@ -462,18 +523,17 @@ async def main():
 
         if latest_ep and latest_ep != prev_ep:
             new_updates.append(anime)
+            # Check watchlist: exact match OR partial match
+            title_lower = title.lower()
             for w in watchlist:
-                if w in title.lower():
+                if w == title_lower or w in title_lower or title_lower in w:
                     watchlist_hits.append(anime)
-                    logger.info(f"  ⭐ WATCHLIST: {title} → {latest_ep}")
+                    logger.info(f"  ⭐ BOOKMARK HIT: {title} → {latest_ep}")
                     break
 
     save_json(STATE_FILE, new_state)
 
     # Phase 4: Save to SQLite
-    sys.path.insert(0, "/opt/services/shared")
-    from db import get_db, upsert_anime, upsert_anime_episodes, log_scrape_run
-
     scrape_start = datetime.now().isoformat()
     db = get_db()
     try:

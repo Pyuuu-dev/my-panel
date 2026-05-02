@@ -9,7 +9,41 @@
 </style>
 
 <h2 class="text-lg sm:text-xl font-bold mb-1">⭐ Bookmarks</h2>
-<p class="text-xs mb-4" style="color:var(--text3)">{{ bookmarks|length }} komik ditandai favorit</p>
+<p class="text-xs mb-1" style="color:var(--text3)">{{ bookmarks|length }} komik • {{ anime_bookmarks|length }} anime — bookmark = watchlist notifikasi</p>
+<p class="text-[9px] mb-4" style="color:var(--text3)">Komik/anime yang di-bookmark akan otomatis mendapat notifikasi Discord saat ada update baru</p>
+
+<!-- Anime Bookmarks -->
+{% if anime_bookmarks %}
+<h3 class="text-sm font-medium text-gray-300 mb-2">🎬 Anime Bookmarks</h3>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+{% for a in anime_bookmarks %}
+<div class="bk flex gap-3 p-3 rounded-xl" style="background:var(--bg2);border:1px solid var(--border)" onclick="window.location='/anime/detail?url={{ a.url|urlencode }}'">
+{% if a.image %}<img src="{{ a.image }}" class="w-16 h-22 object-cover rounded-lg flex-shrink-0" loading="lazy" onerror="this.style.display='none'">{% endif %}
+<div class="flex-1 min-w-0">
+<div class="flex items-center justify-between">
+<p class="text-sm font-medium truncate">{{ a.title }}</p>
+<button onclick="event.stopPropagation();removeAnimeBM(this,{{ a.id }})" class="text-sm flex-shrink-0 hover:scale-110 transition-transform" title="Remove">⭐</button>
+</div>
+<div class="flex items-center gap-1 mt-1 flex-wrap">
+<span class="text-[9px] px-1.5 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">{{ a.type or 'TV' }}</span>
+<span class="text-[9px]" style="color:var(--text3)">{{ a.studio or '?' }}</span>
+{% if a.score %}<span class="text-[9px] text-yellow-500">⭐{{ a.score }}</span>{% endif %}
+</div>
+{% if a.episodes %}
+<div class="mt-1.5">
+{% for ep in a.episodes %}
+<a href="/watch?url={{ ep.url|urlencode }}" onclick="event.stopPropagation()" class="block text-[10px] text-indigo-400 hover:text-indigo-300">{{ ep.text }}{% if ep.date %} <span style="color:var(--text3)">· {{ ep.date }}</span>{% endif %}</a>
+{% endfor %}
+</div>
+{% endif %}
+</div>
+</div>
+{% endfor %}
+</div>
+{% endif %}
+
+<!-- Komik Bookmarks -->
+<h3 class="text-sm font-medium text-gray-300 mb-2">📖 Komik Bookmarks</h3>
 
 {% if bookmarks %}
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -79,6 +113,10 @@ function markChRead(i,url,text){
 }
 function removeBM(el,title){
   fetch('/api/bookmark/remove',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'title='+encodeURIComponent(title)})
+  .then(r=>r.json()).then(d=>{if(!d.bookmarked)el.closest('.bk').remove();});
+}
+function removeAnimeBM(el,id){
+  fetch('/api/anime/bookmark/remove',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'anime_id='+id})
   .then(r=>r.json()).then(d=>{if(!d.bookmarked)el.closest('.bk').remove();});
 }
 function showDetail(id){

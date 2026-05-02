@@ -356,14 +356,23 @@ async def run_scrape():
     max_pages = config["scraper"].get("max_pages", 2)
     detail_limit = config["scraper"].get("detail_limit", 20)
     headers = {"User-Agent": config["scraper"]["user_agent"]}
-    watchlist = [w.lower() for w in config.get("watchlist", [])]
     webhook_cfg = config.get("webhook", {})
     discord_url = webhook_cfg.get("discord_url", "") if webhook_cfg.get("enabled") else ""
+
+    # Watchlist = bookmark dari dashboard + config fallback
+    sys.path.insert(0, "/opt/services/shared")
+    from db import get_db, get_bookmarked_komik_titles
+    db = get_db()
+    watchlist = get_bookmarked_komik_titles(db)
+    db.close()
+    # Tambah dari config sebagai fallback
+    config_watchlist = [w.lower() for w in config.get("watchlist", [])]
+    watchlist = list(set(watchlist + config_watchlist))
 
     prev_state = load_json(STATE_FILE)
     detail_cache = load_json(DETAIL_CACHE)
 
-    logger.info(f"Starting scrape ({max_pages} pages, {len(watchlist)} watchlist, detail_limit={detail_limit})")
+    logger.info(f"Starting scrape ({max_pages} pages, {len(watchlist)} watchlist/bookmarks, detail_limit={detail_limit})")
 
     # Phase 1: Scrape /komik-terbaru/ (has accurate release timestamps)
     all_results = []
@@ -448,7 +457,6 @@ async def run_scrape():
     save_json(DETAIL_CACHE, detail_cache)
 
     # Save to SQLite
-    import sys
     sys.path.insert(0, "/opt/services/shared")
     from db import get_db, upsert_komik, upsert_chapters, log_scrape_run
 

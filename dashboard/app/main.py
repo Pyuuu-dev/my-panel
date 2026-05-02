@@ -779,6 +779,7 @@ async def bookmarks_page(request: Request):
     if not user: return RedirectResponse("/login", 302)
     db = get_db()
     try:
+        # Komik bookmarks
         rows = db.execute("""
             SELECT k.*, b.created_at as bookmarked_at
             FROM bookmarks b JOIN komik k ON b.komik_id=k.id
@@ -795,11 +796,29 @@ async def bookmarks_page(request: Request):
                 "genres": json.loads(r["genres"]) if r["genres"] else [],
                 "chapters": [dict(c) for c in chapters],
             })
+
+        # Anime bookmarks
+        anime_rows = db.execute("""
+            SELECT a.*, ab.created_at as bookmarked_at
+            FROM anime_bookmarks ab JOIN anime a ON ab.anime_id=a.id
+            ORDER BY ab.created_at DESC
+        """).fetchall()
+        anime_bookmarks = []
+        for r in anime_rows:
+            episodes = db.execute(
+                "SELECT text, url, date FROM anime_episodes WHERE anime_id=? ORDER BY id DESC LIMIT 3",
+                (r["id"],)
+            ).fetchall()
+            anime_bookmarks.append({
+                **dict(r),
+                "genres": json.loads(r["genres"]) if r["genres"] else [],
+                "episodes": [dict(e) for e in episodes],
+            })
     finally:
         db.close()
     return tpl.TemplateResponse(request, "bookmarks.html", context={
         "user": user, "page": "bookmarks", "services": get_all_services(),
-        "bookmarks": bookmarks,
+        "bookmarks": bookmarks, "anime_bookmarks": anime_bookmarks,
     })
 
 # ── Search Page (from DB) ──────────────────────────────
@@ -871,24 +890,47 @@ async def anime_page(request: Request):
     db = get_db()
     try:
         rows = db.execute("SELECT * FROM anime ORDER BY updated_at DESC").fetchall()
+        # Get bookmarked anime IDs
+        bookmarked_ids = set(
+            r["anime_id"] for r in db.execute("SELECT anime_id FROM anime_bookmarks").fetchall()
+        )
         anime_list = []
         for r in rows:
             a = dict(r)
             a["genres"] = json.loads(a["genres"]) if a["genres"] else []
-            # Get episode count
             ep_count = db.execute("SELECT COUNT(*) FROM anime_episodes WHERE anime_id=?", (a["id"],)).fetchone()[0]
             a["ep_count"] = ep_count
-            # Get day from last scrape data if not in DB
+            a["bookmarked"] = a["id"] in bookmarked_ids
             if not a.get("day"):
                 a["day"] = ""
             anime_list.append(a)
         total_anime = len(anime_list)
         total_episodes = db.execute("SELECT COUNT(*) FROM anime_episodes").fetchone()[0]
+        total_bookmarked = len(bookmarked_ids)
+
+        # Scrape info
+        last_scrape = db.execute(
+            "SELECT * FROM scrape_runs WHERE source='otakudesu' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        scrape_info = dict(last_scrape) if last_scrape else None
     finally:
         db.close()
+
+    # Calculate next scrape time
+    next_scrape = "—"
+    if scrape_info:
+        try:
+            finished = datetime.fromisoformat(scrape_info["finished_at"])
+            next_t = finished + timedelta(minutes=30)
+            next_scrape = next_t.strftime("%H:%M:%S")
+        except Exception:
+            pass
+
     return tpl.TemplateResponse(request, "anime.html", context={
         "user": user, "page": "anime", "services": get_all_services(),
-        "anime_list": anime_list, "total_anime": total_anime, "total_episodes": total_episodes,
+        "anime_list": anime_list, "total_anime": total_anime,
+        "total_episodes": total_episodes, "total_bookmarked": total_bookmarked,
+        "scrape_info": scrape_info, "next_scrape": next_scrape,
     })
 
 
@@ -904,13 +946,44 @@ async def api_anime_detail(request: Request, anime_id: int):
         data = dict(row)
         data["genres"] = json.loads(data["genres"]) if data["genres"] else []
         episodes = db.execute(
-            "SELECT * FROM anime_episodes WHERE anime_id=? ORDER BY id ASC",
+            "SELECT ae.*, CASE WHEN aws.id IS NOT NULL THEN 1 ELSE 0 END as watched "
+            "FROM anime_episodes ae "
+            "LEFT JOIN anime_watch_status aws ON ae.id=aws.episode_id "
+            "WHERE ae.anime_id=? ORDER BY id ASC",
             (anime_id,)
         ).fetchall()
         data["episodes"] = [dict(e) for e in episodes]
+        data["bookmarked"] = db.execute(
+            "SELECT id FROM anime_bookmarks WHERE anime_id=?", (anime_id,)
+        ).fetchone() is not None
     finally:
         db.close()
     return JSONResponse(data)
+
+
+@app.post("/api/anime/bookmark/{action}")
+async def api_anime_bookmark(request: Request, action: str):
+    """Add/remove anime bookmark. Bookmarked anime = watchlist for notifications."""
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    form = await request.form()
+    anime_id = form.get("anime_id", "")
+    if not anime_id: return JSONResponse({"error": "anime_id required"}, 400)
+
+    db = get_db()
+    try:
+        anime_id = int(anime_id)
+        if action == "add":
+            db.execute("INSERT OR IGNORE INTO anime_bookmarks (anime_id) VALUES (?)", (anime_id,))
+        elif action == "remove":
+            db.execute("DELETE FROM anime_bookmarks WHERE anime_id=?", (anime_id,))
+        db.commit()
+        is_bookmarked = db.execute(
+            "SELECT id FROM anime_bookmarks WHERE anime_id=?", (anime_id,)
+        ).fetchone() is not None
+        return JSONResponse({"ok": True, "bookmarked": is_bookmarked})
+    finally:
+        db.close()
 
 
 @app.get("/watch", response_class=HTMLResponse)
