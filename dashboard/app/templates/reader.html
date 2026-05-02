@@ -1,0 +1,79 @@
+{% extends "base.html" %}{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<style>
+.reader-img{width:100%;max-width:800px;margin:0 auto;display:block;border-radius:4px;margin-bottom:2px}
+.reader-wrap{background:#000;margin:-1.5rem;padding:1rem}
+@media(min-width:768px){.reader-wrap{margin:-1.5rem;padding:2rem}}
+.nav-btn{padding:8px 16px;border-radius:8px;font-size:12px;font-weight:500;transition:all .15s}
+.nav-btn:hover{opacity:.8}
+</style>
+
+<!-- Top Navigation -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+<div>
+<div class="flex items-center gap-2 text-xs mb-1" style="color:var(--text3)">
+<a href="javascript:history.back()" class="hover:opacity-70">← Back</a>
+<span>|</span>
+<a href="{{ chapter_url }}" target="_blank" class="text-indigo-400 hover:text-indigo-300">Situs asli ↗</a>
+</div>
+<h2 class="text-sm sm:text-base font-bold">{{ title }}</h2>
+<span class="text-[10px]" style="color:var(--text3)">{{ images|length }} halaman</span>
+</div>
+</div>
+
+<!-- Chapter Navigation (Top) -->
+<div class="flex items-center justify-between mb-4 p-2 rounded-xl" style="background:var(--bg2);border:1px solid var(--border)">
+{% if prev_ch %}
+<a href="/read?url={{ prev_ch.url|urlencode }}" class="nav-btn bg-indigo-600/20 text-indigo-400">← {{ prev_ch.text }}</a>
+{% else %}
+<span class="nav-btn" style="color:var(--text3);opacity:.4">← Tidak ada</span>
+{% endif %}
+
+<span class="text-[10px] font-medium" style="color:var(--text2)">{{ title|truncate(30) }}</span>
+
+{% if next_ch %}
+<a href="/read?url={{ next_ch.url|urlencode }}" class="nav-btn bg-indigo-600/20 text-indigo-400">{{ next_ch.text }} →</a>
+{% else %}
+<span class="nav-btn" style="color:var(--text3);opacity:.4">Tidak ada →</span>
+{% endif %}
+</div>
+
+{% if error %}
+<div class="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm mb-4">
+Error: {{ error }}
+</div>
+{% endif %}
+
+{% if images %}
+<!-- Reader -->
+<div class="reader-wrap rounded-xl">
+{% for img in images %}
+<img src="{{ img }}" alt="Page {{ loop.index }}" class="reader-img" loading="lazy" onerror="this.style.opacity='0.3';this.alt='Failed to load'">
+{% endfor %}
+</div>
+
+<!-- Bottom Navigation -->
+<div class="flex items-center justify-between mt-4 p-3 rounded-xl" style="background:var(--bg2);border:1px solid var(--border)">
+{% if prev_ch %}
+<a href="/read?url={{ prev_ch.url|urlencode }}" class="nav-btn bg-indigo-600/20 text-indigo-400">← {{ prev_ch.text }}</a>
+{% else %}
+<a href="javascript:history.back()" class="nav-btn" style="background:var(--bg3);color:var(--text2)">← Kembali</a>
+{% endif %}
+
+<button onclick="window.scrollTo({top:0,behavior:'smooth'})" class="nav-btn" style="background:var(--bg3);color:var(--text2)">↑ Ke Atas</button>
+
+{% if next_ch %}
+<a href="/read?url={{ next_ch.url|urlencode }}" class="nav-btn bg-indigo-600/20 text-indigo-400">{{ next_ch.text }} →</a>
+{% else %}
+<a href="javascript:history.back()" class="nav-btn" style="background:var(--bg3);color:var(--text2)">Selesai ✓</a>
+{% endif %}
+</div>
+{% else %}
+{% if not error %}
+<div class="rounded-xl p-8 text-center" style="background:var(--bg2);border:1px dashed var(--border)">
+<p class="text-sm" style="color:var(--text3)">Tidak ada gambar ditemukan.</p>
+<a href="{{ chapter_url }}" target="_blank" class="text-xs text-indigo-400 mt-2 inline-block">Buka di situs asli ↗</a>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,430 @@
+{% extends "base.html" %}{% block title %}{{ meta.name }}{% endblock %}
+{% block head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>{% endblock %}
+{% block content %}
+<style>
+.ch-list{max-height:250px;overflow-y:auto}.ch-list::-webkit-scrollbar{width:4px}.ch-list::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
+.g{font-size:9px;padding:1px 5px;border-radius:9999px;border:1px solid var(--border);color:var(--text2)}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:50;display:none;align-items:center;justify-content:center}
+.modal-bg.show{display:flex}
+.kr:hover{opacity:.85}
+.bm-btn{cursor:pointer;font-size:14px;transition:transform .15s}.bm-btn:hover{transform:scale(1.2)}
+.ch-read{opacity:.4;text-decoration:line-through}
+</style>
+
+<!-- Header -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+<div>
+<div class="flex items-center gap-2 text-xs mb-1" style="color:var(--text3)"><a href="/" class="hover:opacity-70">Dashboard</a><span>/</span><span style="color:var(--text2)">{{ meta.name }}</span></div>
+<h2 class="text-lg sm:text-xl font-bold">{{ meta.name }}</h2>
+<p class="text-xs" style="color:var(--text3)">{{ meta.desc }}</p>
+</div>
+<div class="flex items-center gap-2 flex-wrap">
+<div class="flex items-center gap-2 px-3 py-1.5 rounded-lg" style="background:var(--bg2);border:1px solid var(--border)">
+{% if status.state=="RUNNING" %}<div class="w-2.5 h-2.5 bg-emerald-500 rounded-full pg"></div><span class="text-xs text-emerald-400">Running</span>
+{% elif status.state=="FATAL" %}<div class="w-2.5 h-2.5 bg-red-500 rounded-full"></div><span class="text-xs text-red-400">Fatal</span>
+{% elif status.state=="STOPPED" %}<div class="w-2.5 h-2.5 rounded-full" style="background:var(--text3)"></div><span class="text-xs" style="color:var(--text3)">Stopped</span>
+{% else %}<div class="w-2.5 h-2.5 bg-yellow-500 rounded-full"></div><span class="text-xs text-yellow-400">{{ status.state }}</span>{% endif %}
+{% if status.pid %}<span class="text-[10px]" style="color:var(--text3)">PID {{ status.pid }}</span>{% endif %}
+</div>
+{% if status.state!="RUNNING" %}
+<form method="POST" action="/svc/{{ slug }}/start"><button class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded-lg font-medium">Start</button></form>
+{% else %}
+<form method="POST" action="/svc/{{ slug }}/restart"><button class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg font-medium">Restart</button></form>
+<form method="POST" action="/svc/{{ slug }}/stop"><button class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs rounded-lg font-medium">Stop</button></form>
+{% endif %}
+</div>
+</div>
+
+{% set url_msg = request.query_params.get('msg','') %}
+{% if url_msg %}<div class="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400 text-sm">{{ url_msg }}</div>{% endif %}
+{% set active_tab = request.query_params.get('tab','overview') %}
+
+<div class="flex gap-1 mb-4 overflow-x-auto" style="border-bottom:1px solid var(--border)">
+{% for t in [("overview","Overview"),("logs","Logs"),("stats","Stats"),("config","Settings"),("data","Data")] %}
+<button class="tab-btn {% if active_tab==t[0] %}active{% endif %}" data-tab-btn-group="m" data-tab-btn="{{ t[0] }}" onclick="switchTab('m','{{ t[0] }}')">{{ t[1] }}</button>
+{% endfor %}
+</div>
+
+<!-- ═══ OVERVIEW ═══ -->
+<div class="tab-panel {% if active_tab=='overview' %}active{% endif %}" data-tab-group="m" data-tab="overview">
+{% if latest %}
+<div class="flex flex-wrap items-center gap-x-4 gap-y-1 mb-4 px-1 text-[10px]" style="color:var(--text3)">
+<span>🕐 Server: <span id="server-clock" style="color:var(--text2)">{{ server_time }}</span></span>
+<span>📥 Last: <span style="color:var(--text2)">{{ latest.scraped_at[11:19] }}</span></span>
+<span>⏭️ Next: <span class="text-indigo-400">~{{ next_scrape }}</span></span>
+<span>🔄 {{ interval_min }}min</span>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3 mb-4">
+<div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)"><div class="text-[10px]" style="color:var(--text3)">Total</div><div class="text-lg font-bold">{{ latest.total }}</div></div>
+<div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)"><div class="text-[10px]" style="color:var(--text3)">New</div><div class="text-lg font-bold text-emerald-400">{{ latest.new_updates|default(0) }}</div></div>
+<div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)"><div class="text-[10px]" style="color:var(--text3)">Watchlist</div><div class="text-lg font-bold text-yellow-400">{{ latest.watchlist_hits|default([])|length }}</div></div>
+<div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)"><div class="text-[10px]" style="color:var(--text3)">Bookmarks</div><div class="text-lg font-bold text-indigo-400">{{ bookmarked_ids|length }}</div></div>
+</div>
+
+{% if latest.watchlist_hits is defined and latest.watchlist_hits %}
+<div class="bg-yellow-500/5 border border-yellow-500/20 rounded-xl p-3 mb-4">
+<h4 class="text-[10px] font-medium text-yellow-400 mb-2">WATCHLIST ALERTS</h4>
+{% for hit in latest.watchlist_hits %}
+<div class="flex items-center justify-between py-1">
+<span class="text-xs">{{ hit }}</span>
+{% for k in latest.data if k.title==hit %}{% if k.chapters %}<a href="{{ k.chapters[0].url }}" target="_blank" class="text-[10px] text-indigo-400">{{ k.chapters[0].text }} {% if k.chapters[0].date %}· {{ k.chapters[0].date }}{% endif %} →</a>{% endif %}{% endfor %}
+</div>
+{% endfor %}
+</div>
+{% endif %}
+
+<!-- Bookmarked komik section -->
+{% set bm_komik = [] %}
+{% for k in latest.data if k.title in bookmarked_ids %}{% if bm_komik.append(k) %}{% endif %}{% endfor %}
+{% if bm_komik %}
+<div class="rounded-xl p-3 mb-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-xs font-medium mb-2">⭐ Bookmarked</h4>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+{% for k in bm_komik %}
+{% set ch = k.chapters[0] if k.chapters else {} %}
+<div class="flex items-center gap-2 p-2 rounded-lg" style="background:var(--bg3)">
+{% if k.image %}<img src="{{ k.image }}" class="w-10 h-14 object-cover rounded" loading="lazy" onerror="this.style.display='none'">{% endif %}
+<div class="flex-1 min-w-0">
+<p class="text-[11px] font-medium truncate">{{ k.title }}</p>
+{% if ch %}<a href="{{ ch.url }}" target="_blank" class="text-[10px] text-indigo-400">{{ ch.text }}</a>
+{% if ch.date %}<span class="text-[9px]" style="color:var(--text3)"> · {{ ch.date }}</span>{% endif %}{% endif %}
+</div>
+</div>
+{% endfor %}
+</div>
+</div>
+{% endif %}
+
+<!-- Search -->
+<div class="mb-4">
+<input type="text" id="search-input" placeholder="Cari judul komik..." oninput="doSearch(this.value)"
+class="w-full px-3 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg2);border:1px solid var(--border);color:var(--text)">
+<div id="search-results" class="mt-2 hidden"></div>
+</div>
+
+<!-- Komik Grid -->
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<div class="flex items-center justify-between mb-3">
+<h4 class="text-sm font-medium">Update Chapter Komik Terbaru</h4>
+<span class="text-[10px]" style="color:var(--text3)">{{ latest.total }} komik</span>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[600px] overflow-y-auto pr-1">
+{% for k in latest.data[:60] %}
+{% set ch = k.chapters[0] if k.chapters else {} %}
+{% set ch_date = ch.get('date','') if ch else '' %}
+{% set is_recent = ch_date and ('menit' in ch_date or 'jam' in ch_date or 'detik' in ch_date) %}
+{% set is_bm = k.title in bookmarked_ids %}
+<div class="kr flex gap-2.5 p-2 rounded-lg cursor-pointer {% if is_recent %}border-l-2 border-l-emerald-500{% endif %}" style="border:1px solid var(--border)" onclick="showDetail({{ loop.index0 }})">
+{% if k.image %}
+<img src="{{ k.image }}" alt="{{ k.title }}" class="w-[56px] h-[78px] object-cover rounded-md flex-shrink-0" style="background:var(--bg3)" loading="lazy" onerror="this.style.display='none'">
+{% else %}<div class="w-[56px] h-[78px] rounded-md flex-shrink-0" style="background:var(--bg3)"></div>{% endif %}
+<div class="flex-1 min-w-0">
+<div class="flex items-center gap-1">
+<p class="text-[11px] font-medium truncate leading-tight flex-1">{{ k.title }}</p>
+<span class="bm-btn flex-shrink-0" onclick="event.stopPropagation();toggleBM(this,'{{ k.title|e }}')">{{ '⭐' if is_bm else '☆' }}</span>
+</div>
+<div class="flex items-center gap-1 mt-0.5 flex-wrap">
+<span class="text-[9px] px-1 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">{{ k.type or '?' }}</span>
+{% if k.color %}<span class="text-[9px] px-1 py-0.5 rounded bg-purple-900/40 text-purple-300">Color</span>{% endif %}
+{% if k.rating %}<span class="text-[9px] text-yellow-500">⭐{{ k.rating }}</span>{% endif %}
+</div>
+{% if k.genres %}<div class="flex gap-0.5 mt-0.5">{% for g in k.genres[:2] %}<span class="g">{{ g }}</span>{% endfor %}</div>{% endif %}
+<div class="flex items-center justify-between mt-1">
+{% if ch %}<a href="{{ ch.url }}" target="_blank" onclick="event.stopPropagation();markRead('{{ ch.url }}')" class="text-[10px] text-indigo-400 hover:text-indigo-300 {% if ch.url in read_chapter_urls %}ch-read{% endif %}">{{ ch.text }}</a>{% endif %}
+<span class="text-[9px] {% if is_recent %}text-emerald-400{% else %}{% endif %}" style="{% if not is_recent %}color:var(--text3){% endif %}">{{ ch_date }}</span>
+</div>
+</div>
+</div>
+{% endfor %}
+</div>
+</div>
+{% else %}
+<div class="rounded-xl p-8 text-center" style="background:var(--bg2);border:1px dashed var(--border)">
+<p class="text-sm" style="color:var(--text3)">No data yet. Start the service.</p></div>
+{% endif %}
+</div>
+
+<!-- ═══ LOGS ═══ -->
+<div class="tab-panel {% if active_tab=='logs' %}active{% endif %}" data-tab-group="m" data-tab="logs">
+<div class="flex items-center justify-between mb-3">
+<h4 class="text-xs" style="color:var(--text2)">Activity Log</h4>
+<div class="flex gap-2">
+<a href="/svc/{{ slug }}?tab=logs" class="text-[10px] px-2 py-1 rounded" style="background:var(--bg3);color:var(--text2)">↻ Refresh</a>
+<a href="/svc/{{ slug }}/log-raw" target="_blank" class="text-[10px] px-2 py-1 rounded" style="background:var(--bg3);color:var(--text2)">Raw</a>
+</div>
+</div>
+<div class="rounded-xl overflow-hidden mb-4" style="background:var(--bg2);border:1px solid var(--border)">
+<div class="max-h-[450px] overflow-y-auto" id="log-friendly">
+{% for entry in log_entries[-100:] %}
+<div class="flex items-start gap-2 px-3 py-1.5 text-[11px] {% if entry.level=='error' %}bg-red-500/5{% elif entry.level=='warning' %}bg-yellow-500/5{% elif 'WATCHLIST' in entry.msg %}bg-yellow-500/5{% elif 'Done:' in entry.msg %}bg-emerald-500/5{% endif %}" style="border-bottom:1px solid var(--border)">
+<span class="flex-shrink-0 w-[52px] font-mono" style="color:var(--text3)">{{ entry.time[11:19] if entry.time else '' }}</span>
+{% if entry.level=='error' %}<span class="flex-shrink-0 px-1 py-0.5 rounded text-[9px] bg-red-500/20 text-red-400">ERR</span>
+{% elif entry.level=='warning' %}<span class="flex-shrink-0 px-1 py-0.5 rounded text-[9px] bg-yellow-500/20 text-yellow-400">WRN</span>
+{% elif entry.level=='info' %}<span class="flex-shrink-0 px-1 py-0.5 rounded text-[9px] bg-blue-500/10 text-blue-400">INF</span>
+{% else %}<span class="flex-shrink-0 px-1 py-0.5 rounded text-[9px]" style="background:var(--bg3);color:var(--text3)">LOG</span>{% endif %}
+<span class="break-all {% if 'WATCHLIST' in entry.msg %}text-yellow-300 font-medium{% elif 'Done:' in entry.msg %}text-emerald-400{% elif 'Error' in entry.msg or 'failed' in entry.msg %}text-red-400{% endif %}" style="color:var(--text2)">{{ entry.msg }}</span>
+</div>
+{% endfor %}
+{% if not log_entries %}<div class="p-4 text-center text-xs" style="color:var(--text3)">No log entries yet</div>{% endif %}
+</div>
+</div>
+{% if err_content and err_content.strip() and err_content!="(no log file yet)" %}
+<div class="rounded-xl p-3" style="border:1px solid rgba(239,68,68,.2)">
+<h4 class="text-[10px] text-red-400 font-medium mb-2">⚠️ Error Log</h4>
+<div class="log-box" style="max-height:200px;border:none;padding:.5rem">{{ err_content }}</div>
+</div>
+{% endif %}
+</div>
+
+<!-- ═══ STATS ═══ -->
+<div class="tab-panel {% if active_tab=='stats' %}active{% endif %}" data-tab-group="m" data-tab="stats">
+<!-- Chart -->
+<div class="rounded-xl p-4 mb-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-3">Scrape History (7 hari)</h4>
+<div style="height:200px"><canvas id="statsChart"></canvas></div>
+</div>
+<!-- Uptime -->
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-3">Uptime Events</h4>
+{% if uptime_events %}
+<div class="space-y-1 max-h-[250px] overflow-y-auto">
+{% for ev in uptime_events %}
+<div class="flex items-center gap-3 px-3 py-1.5 rounded text-[11px]" style="background:var(--bg3)">
+<span class="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] {% if ev.event=='start' %}bg-emerald-500/20 text-emerald-400{% elif ev.event=='stop' %}bg-red-500/20 text-red-400{% else %}bg-yellow-500/20 text-yellow-400{% endif %}">{{ ev.event }}</span>
+<span style="color:var(--text3)">{{ ev.timestamp }}</span>
+</div>
+{% endfor %}
+</div>
+{% else %}<p class="text-xs" style="color:var(--text3)">No events yet. Start/stop the service to see events.</p>{% endif %}
+</div>
+</div>
+
+<!-- ═══ SETTINGS ═══ -->
+<div class="tab-panel {% if active_tab=='config' %}active{% endif %}" data-tab-group="m" data-tab="config">
+<form method="POST" action="/svc/{{ slug }}/config" class="space-y-4">
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-3">Scraper</h4>
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Interval (menit)</label>
+<input type="number" name="interval_minutes" value="{{ cfg.scraper.interval_minutes|default(30) }}" min="5" max="1440" class="w-full px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border)"></div>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Max Pages</label>
+<input type="number" name="max_pages" value="{{ cfg.scraper.max_pages|default(2) }}" min="1" max="10" class="w-full px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border)"></div>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Delay (detik)</label>
+<input type="number" name="delay" value="{{ cfg.scraper.delay|default(3) }}" min="1" max="30" class="w-full px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border)"></div>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Detail Limit</label>
+<input type="number" name="detail_limit" value="{{ cfg.scraper.detail_limit|default(20) }}" min="0" max="50" class="w-full px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border)"></div>
+</div></div>
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-1">Watchlist</h4>
+<p class="text-[9px] mb-2" style="color:var(--text3)">Satu judul per baris. Partial match.</p>
+<textarea name="watchlist" rows="4" placeholder="One Piece&#10;Solo Leveling" class="w-full px-2 py-1.5 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)">{% for w in cfg.watchlist|default([]) %}{{ w }}
+{% endfor %}</textarea></div>
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-1">Discord Webhook</h4>
+<p class="text-[9px] mb-3" style="color:var(--text3)">Discord → Server Settings → Integrations → Webhooks → New Webhook → Copy URL</p>
+<div class="space-y-3">
+<label class="flex items-center gap-3 cursor-pointer"><input type="checkbox" name="webhook_enabled" {% if cfg.webhook is defined and cfg.webhook.enabled %}checked{% endif %} class="w-4 h-4 rounded border-gray-600 text-indigo-600 focus:ring-indigo-500"><span class="text-xs">Enable</span></label>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Webhook URL</label>
+<input type="text" name="discord_url" value="{{ cfg.webhook.discord_url|default('') if cfg.webhook is defined else '' }}" placeholder="https://discord.com/api/webhooks/..." class="w-full px-2 py-1.5 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)"></div>
+<div class="flex flex-wrap gap-4">
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" name="notify_watchlist" {% if cfg.webhook is defined and cfg.webhook.notify_on_watchlist|default(true) %}checked{% endif %} class="w-3.5 h-3.5 rounded border-gray-600 text-indigo-600"><span class="text-[10px]" style="color:var(--text2)">Alert watchlist</span></label>
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" name="notify_summary" {% if cfg.webhook is defined and cfg.webhook.notify_on_scrape_done %}checked{% endif %} class="w-3.5 h-3.5 rounded border-gray-600 text-indigo-600"><span class="text-[10px]" style="color:var(--text2)">Summary</span></label>
+</div></div></div>
+<!-- Telegram -->
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-1">Telegram Bot</h4>
+<p class="text-[9px] mb-3" style="color:var(--text3)">Buat bot di @BotFather → /newbot → copy token. Chat ID: kirim pesan ke bot, lalu buka api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</p>
+<div class="space-y-3">
+<label class="flex items-center gap-3 cursor-pointer"><input type="checkbox" name="tg_enabled" {% if cfg.telegram is defined and cfg.telegram.enabled %}checked{% endif %} class="w-4 h-4 rounded border-gray-600 text-indigo-600 focus:ring-indigo-500"><span class="text-xs">Enable</span></label>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Bot Token</label>
+<input type="text" name="tg_token" value="{{ cfg.telegram.bot_token|default('') if cfg.telegram is defined else '' }}" placeholder="123456:ABC-DEF..." class="w-full px-2 py-1.5 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)"></div>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Chat ID</label>
+<input type="text" name="tg_chat_id" value="{{ cfg.telegram.chat_id|default('') if cfg.telegram is defined else '' }}" placeholder="-100123456789" class="w-full px-2 py-1.5 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)"></div>
+</div>
+</div></div>
+<!-- Cleanup -->
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-2">Auto-Cleanup</h4>
+<div class="flex items-center gap-2">
+<span class="text-[10px]" style="color:var(--text3)">Simpan</span>
+<input type="number" name="keep_days" value="{{ cfg.cleanup.keep_days|default(7) if cfg.cleanup is defined else 7 }}" min="1" max="90" class="w-16 px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border)">
+<span class="text-[10px]" style="color:var(--text3)">hari</span>
+</div></div>
+<div class="flex items-center justify-end"><button type="submit" class="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg font-medium">Save Settings</button></div>
+</form>
+<!-- Test buttons -->
+<div class="flex flex-wrap gap-2 mt-3">
+<form method="POST" action="/svc/{{ slug }}/test-webhook"><button type="submit" class="px-3 py-1.5 bg-yellow-600/20 hover:bg-yellow-600/30 text-yellow-400 text-xs rounded-lg border border-yellow-600/30">🧪 Test Discord</button></form>
+<form method="POST" action="/svc/{{ slug }}/test-telegram"><button type="submit" class="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 text-xs rounded-lg border border-blue-600/30">🧪 Test Telegram</button></form>
+<span class="text-[9px] self-center" style="color:var(--text3)">Save dulu sebelum test</span>
+</div>
+</div>
+
+<!-- ═══ DATA ═══ -->
+<div class="tab-panel {% if active_tab=='data' %}active{% endif %}" data-tab-group="m" data-tab="data">
+<div class="flex items-center justify-between mb-3">
+<h4 class="text-xs" style="color:var(--text2)">Output Files</h4>
+<form method="POST" action="/svc/{{ slug }}/cleanup"><button class="text-[10px] px-3 py-1 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded-lg border border-red-900/30">Cleanup</button></form>
+</div>
+{% if files %}
+<div class="space-y-1">{% for f in files %}
+<div class="flex items-center justify-between p-2 rounded-lg" style="background:var(--bg2);border:1px solid var(--border)">
+<span class="text-xs font-mono" style="color:var(--text2)">{{ f.name }}</span>
+<div class="flex gap-3"><span class="text-[10px]" style="color:var(--text3)">{{ f.size }}</span><span class="text-[10px]" style="color:var(--text3)">{{ f.time }}</span></div></div>
+{% endfor %}</div>
+{% else %}<p class="text-sm text-center py-8" style="color:var(--text3)">No files yet.</p>{% endif %}
+</div>
+
+<!-- ═══ Detail Modal ═══ -->
+<div class="modal-bg" id="detail-modal" onclick="if(event.target===this)this.classList.remove('show')">
+<div class="w-full max-w-lg max-h-[90vh] overflow-y-auto mx-2 sm:mx-4 p-4 sm:p-5 rounded-2xl" style="background:var(--bg2);border:1px solid var(--border)">
+<div class="flex justify-between items-start mb-3">
+<h3 class="text-lg font-bold pr-4" id="dm-title"></h3>
+<button onclick="document.getElementById('detail-modal').classList.remove('show')" class="text-xl leading-none" style="color:var(--text3)">×</button>
+</div>
+<div class="flex gap-4 mb-3">
+<img id="dm-img" src="" class="w-28 h-40 sm:w-32 sm:h-44 object-cover rounded-lg" style="background:var(--bg3)" onerror="this.style.display='none'">
+<div class="flex-1"><div id="dm-meta" class="space-y-0.5"></div><div id="dm-genres" class="flex flex-wrap gap-1 mt-2"></div></div>
+</div>
+<div id="dm-synopsis" class="text-[11px] mb-3 hidden" style="color:var(--text2)"></div>
+<h4 class="text-[10px] uppercase tracking-wider mb-1" style="color:var(--text3)">All Chapters</h4>
+<div id="dm-chapters" class="ch-list space-y-0.5"></div>
+</div>
+</div>
+
+<script>
+{% if latest %}const DATA={{ latest.data|tojson }};{% else %}const DATA=[];{% endif %}
+const READ_URLS=new Set({{ read_chapter_urls|list|tojson }});
+const BM_SET=new Set({{ bookmarked_ids|list|tojson }});
+
+// Bookmark toggle
+function toggleBM(el,title){
+  const adding=el.textContent.trim()==='☆';
+  fetch('/api/bookmark/'+(adding?'add':'remove'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'title='+encodeURIComponent(title)})
+  .then(r=>r.json()).then(d=>{
+    el.textContent=d.bookmarked?'⭐':'☆';
+    if(d.bookmarked)BM_SET.add(title);else BM_SET.delete(title);
+  });
+}
+
+// Mark chapter as read
+function markRead(url){
+  if(READ_URLS.has(url))return;
+  READ_URLS.add(url);
+  fetch('/api/read',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'url='+encodeURIComponent(url)});
+  // Update UI
+  document.querySelectorAll('a[href="'+url+'"]').forEach(a=>a.classList.add('ch-read'));
+}
+
+function showDetail(i){
+  const k=DATA[i];if(!k)return;
+  document.getElementById('dm-title').textContent=k.title;
+  const img=document.getElementById('dm-img');
+  if(k.image){img.src=k.image;img.style.display='block'}else img.style.display='none';
+  let m='';
+  m+='<p class="text-[11px]"><span style="color:var(--text3)">Type:</span> '+(k.type||'?')+'</p>';
+  m+='<p class="text-[11px]"><span style="color:var(--text3)">Status:</span> '+(k.status||'?')+'</p>';
+  m+='<p class="text-[11px]"><span style="color:var(--text3)">Rating:</span> '+(k.rating||'?')+'</p>';
+  if(k.author)m+='<p class="text-[11px]"><span style="color:var(--text3)">Author:</span> '+k.author+'</p>';
+  if(k.artist&&k.artist!==k.author)m+='<p class="text-[11px]"><span style="color:var(--text3)">Artist:</span> '+k.artist+'</p>';
+  if(k.updated_at)m+='<p class="text-[11px]"><span style="color:var(--text3)">Updated:</span> '+k.updated_at.substring(0,10)+'</p>';
+  document.getElementById('dm-meta').innerHTML=m;
+  document.getElementById('dm-genres').innerHTML=(k.genres||[]).map(g=>'<span class="g">'+g+'</span>').join('');
+  const sd=document.getElementById('dm-synopsis');
+  if(k.synopsis){sd.textContent=k.synopsis;sd.classList.remove('hidden')}else sd.classList.add('hidden');
+  let c='';
+  (k.chapters||[]).forEach(ch=>{
+    const isRead=READ_URLS.has(ch.url);
+    c+='<div class="flex items-center justify-between px-2 py-1 rounded '+(isRead?'ch-read':'')+'" style="border-bottom:1px solid var(--border)">';
+    c+='<span class="text-[11px] flex-1 '+(isRead?'':'')+ '" style="color:var(--text2)" onclick="markRead(\''+ch.url+'\')">'+ch.text+'</span>';
+    c+='<div class="flex items-center gap-1.5 flex-shrink-0">';
+    if(ch.date)c+='<span class="text-[9px]" style="color:var(--text3)">'+ch.date+'</span>';
+    c+='<a href="/read?url='+encodeURIComponent(ch.url)+'" onclick="markRead(\''+ch.url+'\')" class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/40">Baca</a>';
+    c+='<a href="'+ch.url+'" target="_blank" onclick="markRead(\''+ch.url+'\')" class="text-[9px] px-1.5 py-0.5 rounded text-indigo-400 hover:opacity-70" style="background:var(--bg3)">↗</a>';
+    c+='<button onclick="dlCh(\''+ch.url+'\')" class="text-[9px] px-1 py-0.5 rounded hover:opacity-70" style="background:var(--bg3);color:var(--text3)" title="Send to Discord">📤</button>';
+    c+='</div></div>';
+  });
+  document.getElementById('dm-chapters').innerHTML=c||'<p class="text-[11px] p-2" style="color:var(--text3)">No chapters</p>';
+  document.getElementById('detail-modal').classList.add('show');
+}
+
+// Live clock
+(function(){
+  const el=document.getElementById('server-clock');if(!el)return;
+  const p='{{ server_time }}'.split(/[- :]/);
+  let d=new Date(p[0],p[1]-1,p[2],p[3],p[4],p[5]);
+  setInterval(()=>{d=new Date(d.getTime()+1000);const z=n=>String(n).padStart(2,'0');
+    el.textContent=d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes())+':'+z(d.getSeconds());
+  },1000);
+})();
+// Always scroll log to bottom (latest entries visible)
+setTimeout(function(){
+  var el=document.getElementById('log-friendly');
+  if(el)el.scrollTop=el.scrollHeight;
+  document.querySelectorAll('.log-box').forEach(function(e){e.scrollTop=e.scrollHeight;});
+},150);
+
+// Stats chart
+(function(){
+  const ctx=document.getElementById('statsChart');
+  if(!ctx)return;
+  const stats={{ scrape_stats|tojson }};
+  if(!stats.length)return;
+  new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels:stats.map(s=>s.day?s.day.substring(5):'?'),
+      datasets:[
+        {label:'New Chapters',data:stats.map(s=>s.new_ch||0),backgroundColor:'#10b981',borderRadius:4},
+        {label:'Scrape Runs',data:stats.map(s=>s.runs||0),backgroundColor:'#6366f1',borderRadius:4},
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#9ca3af',font:{size:10}}}},
+      scales:{
+        x:{ticks:{color:'#6b7280',font:{size:10}},grid:{color:'#1f293720'}},
+        y:{ticks:{color:'#6b7280',font:{size:10}},grid:{color:'#1f293740'},beginAtZero:true}
+      }
+    }
+  });
+})();
+
+// Download chapter to Discord
+function dlCh(url){
+  if(!confirm('Send chapter images to Discord webhook?'))return;
+  const btn=event.target;btn.textContent='⏳';btn.disabled=true;
+  fetch('/api/download-chapter',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'url='+encodeURIComponent(url)})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){btn.textContent='✅';alert(d.msg);}
+    else{btn.textContent='❌';alert('Error: '+(d.error||'Unknown'));}
+    setTimeout(()=>{btn.textContent='📤';btn.disabled=false;},3000);
+  }).catch(e=>{btn.textContent='❌';btn.disabled=false;alert('Error: '+e);});
+}
+
+let st;
+function doSearch(q){
+  clearTimeout(st);const b=document.getElementById('search-results');
+  if(!q||q.length<2){b.classList.add('hidden');return}
+  st=setTimeout(()=>{
+    fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()).then(d=>{
+      if(!d.results.length){b.innerHTML='<p class="text-[10px] py-2" style="color:var(--text3)">No results</p>';b.classList.remove('hidden');return}
+      let h='<div class="space-y-1 max-h-48 overflow-y-auto">';
+      d.results.forEach(k=>{
+        const ch=k.chapters&&k.chapters[0];
+        h+='<div class="flex items-center gap-2 p-1.5 rounded-lg" style="background:var(--bg3)">';
+        if(k.image)h+='<img src="'+k.image+'" class="w-6 h-8 object-cover rounded" loading="lazy" onerror="this.style.display=\'none\'">';
+        h+='<div class="flex-1 min-w-0"><p class="text-[11px] truncate">'+k.title+'</p>';
+        h+='<span class="text-[9px]" style="color:var(--text3)">'+(k.type||'?')+'</span>';
+        if(ch)h+=' <a href="'+ch.url+'" target="_blank" class="text-[9px] text-indigo-400">'+ch.text+'</a>';
+        h+='</div></div>';
+      });
+      h+='</div><p class="text-[9px] mt-1" style="color:var(--text3)">'+d.total+' result(s)</p>';
+      b.innerHTML=h;b.classList.remove('hidden');
+    });
+  },300);
+}
+</script>
+{% endblock %}

@@ -1,0 +1,121 @@
+{% extends "base.html" %}{% block title %}Search{% endblock %}
+{% block content %}
+<style>
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:50;display:none;align-items:center;justify-content:center}
+.modal-bg.show{display:flex}
+.ch-list{max-height:250px;overflow-y:auto}.ch-list::-webkit-scrollbar{width:4px}.ch-list::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
+.g{font-size:9px;padding:1px 5px;border-radius:9999px;border:1px solid var(--border);color:var(--text2)}
+.sr:hover{opacity:.85;cursor:pointer}
+</style>
+
+<h2 class="text-lg sm:text-xl font-bold mb-1">🔍 Search Database</h2>
+<p class="text-xs mb-4" style="color:var(--text3)">{{ total_komik }} komik · {{ total_ch }} chapter dari semua source</p>
+
+<input type="text" id="q" value="{{ q }}" placeholder="Ketik judul komik..." autofocus oninput="liveSearch()"
+class="w-full px-4 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4" style="background:var(--bg2);border:1px solid var(--border);color:var(--text)">
+
+<div id="info" class="text-xs mb-3" style="color:var(--text3)"></div>
+<div id="results" class="space-y-2"></div>
+
+<!-- Detail Modal -->
+<div class="modal-bg" id="dm" onclick="if(event.target===this)this.classList.remove('show')">
+<div class="w-full max-w-lg max-h-[90vh] overflow-y-auto mx-2 sm:mx-4 p-4 sm:p-5 rounded-2xl" style="background:var(--bg2);border:1px solid var(--border)">
+<div class="flex justify-between items-start mb-3">
+<h3 class="text-lg font-bold pr-4" id="dm-t"></h3>
+<button onclick="document.getElementById('dm').classList.remove('show')" class="text-xl" style="color:var(--text3)">×</button>
+</div>
+<div class="flex gap-4 mb-3">
+<img id="dm-img" src="" class="w-28 h-40 sm:w-32 sm:h-44 object-cover rounded-lg" style="background:var(--bg3)" onerror="this.style.display='none'">
+<div class="flex-1"><div id="dm-meta"></div><div id="dm-genres" class="flex flex-wrap gap-1 mt-2"></div></div>
+</div>
+<div id="dm-syn" class="text-[11px] mb-3 hidden" style="color:var(--text2)"></div>
+<div class="flex items-center justify-between mb-1">
+<h4 class="text-[10px] uppercase tracking-wider" style="color:var(--text3)">Chapters</h4>
+<span id="dm-chcount" class="text-[9px]" style="color:var(--text3)"></span>
+</div>
+<div id="dm-ch" class="ch-list space-y-0.5"></div>
+</div>
+</div>
+
+<script>
+let timer;
+function liveSearch(){
+  clearTimeout(timer);
+  const q=document.getElementById('q').value.trim();
+  if(q.length<2){document.getElementById('results').innerHTML='';document.getElementById('info').textContent='Ketik minimal 2 huruf...';return;}
+  document.getElementById('info').textContent='Mencari...';
+  timer=setTimeout(()=>{
+    fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()).then(d=>{
+      document.getElementById('info').textContent=d.total+' hasil untuk "'+d.query+'"';
+      let h='';
+      d.results.forEach(k=>{
+        const ch=k.chapters&&k.chapters[0];
+        h+='<div class="sr flex gap-3 p-3 rounded-xl" style="background:var(--bg2);border:1px solid var(--border)" onclick="showDetail('+k.id+')">';
+        if(k.image)h+='<img src="'+k.image+'" class="w-14 h-20 object-cover rounded-lg flex-shrink-0" style="background:var(--bg3)" loading="lazy" onerror="this.style.display=\'none\'">';
+        h+='<div class="flex-1 min-w-0">';
+        h+='<div class="flex items-center gap-2"><p class="text-sm font-medium truncate">'+k.title+'</p><span class="text-[9px] px-1.5 py-0.5 rounded flex-shrink-0" style="background:var(--bg3);color:var(--text3)">'+k.source+'</span></div>';
+        h+='<div class="flex items-center gap-1 mt-0.5 flex-wrap">';
+        h+='<span class="text-[9px] px-1.5 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">'+(k.type||'?')+'</span>';
+        if(k.status)h+='<span class="text-[9px] '+(k.status.includes('Ongoing')?'text-emerald-400':'text-orange-400')+'">'+k.status+'</span>';
+        if(k.rating)h+='<span class="text-[9px] text-yellow-500">⭐'+k.rating+'</span>';
+        if(k.author)h+='<span class="text-[9px]" style="color:var(--text3)">✍️ '+k.author+'</span>';
+        h+='</div>';
+        if(k.genres&&k.genres.length)h+='<div class="flex flex-wrap gap-1 mt-1">'+k.genres.slice(0,4).map(g=>'<span class="g">'+g+'</span>').join('')+'</div>';
+        if(ch)h+='<div class="mt-1"><a href="'+ch.url+'" target="_blank" onclick="event.stopPropagation()" class="text-[10px] text-indigo-400">'+ch.text+(ch.date?' · '+ch.date:'')+'</a></div>';
+        h+='</div></div>';
+      });
+      document.getElementById('results').innerHTML=h;
+    });
+  },300);
+}
+
+function showDetail(id){
+  fetch('/api/komik/'+id).then(r=>r.json()).then(k=>{
+    if(k.error)return;
+    document.getElementById('dm-t').textContent=k.title;
+    const img=document.getElementById('dm-img');
+    if(k.image){img.src=k.image;img.style.display='block'}else img.style.display='none';
+    let m='';
+    m+='<p class="text-[11px]"><span style="color:var(--text3)">Type:</span> '+(k.type||'?')+'</p>';
+    m+='<p class="text-[11px]"><span style="color:var(--text3)">Status:</span> '+(k.status||'?')+'</p>';
+    m+='<p class="text-[11px]"><span style="color:var(--text3)">Rating:</span> '+(k.rating||'?')+'</p>';
+    m+='<p class="text-[11px]"><span style="color:var(--text3)">Source:</span> '+k.source+'</p>';
+    if(k.author)m+='<p class="text-[11px]"><span style="color:var(--text3)">Author:</span> '+k.author+'</p>';
+    if(k.alt_title)m+='<p class="text-[9px] mt-1" style="color:var(--text3)">'+k.alt_title.substring(0,120)+'</p>';
+    document.getElementById('dm-meta').innerHTML=m;
+    document.getElementById('dm-genres').innerHTML=(k.genres||[]).map(g=>'<span class="g">'+g+'</span>').join('');
+    const sd=document.getElementById('dm-syn');
+    if(k.synopsis){sd.textContent=k.synopsis;sd.classList.remove('hidden')}else sd.classList.add('hidden');
+    document.getElementById('dm-chcount').textContent=k.chapters.length+' chapters';
+    let c='';
+    let readCount=0;
+    (k.chapters||[]).forEach((ch,i)=>{
+      const isRead=ch.read;
+      if(isRead)readCount++;
+      c+='<div id="ch-row-'+i+'" class="flex items-center justify-between px-2 py-1 rounded '+(isRead?'opacity-50':'')+'" style="border-bottom:1px solid var(--border)">';
+      c+='<span id="ch-txt-'+i+'" class="text-[11px] '+(isRead?'line-through':'')+'" style="color:var(--text2)">'+ch.text+(isRead?' ✓':'')+'</span>';
+      c+='<div class="flex items-center gap-2">';
+      if(ch.date)c+='<span class="text-[9px]" style="color:var(--text3)">'+ch.date+'</span>';
+      c+='<a href="/read?url='+encodeURIComponent(ch.url)+'" onclick="markChRead('+i+',\''+ch.url+'\',\''+ch.text+'\')" class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/40">Baca</a>';
+      c+='<a href="'+ch.url+'" target="_blank" onclick="markChRead('+i+',\''+ch.url+'\',\''+ch.text+'\')" class="text-[9px] px-1.5 py-0.5 rounded text-indigo-400 hover:opacity-70" style="background:var(--bg3)">↗</a>';
+      c+='</div></div>';
+    });
+    document.getElementById('dm-chcount').textContent=k.chapters.length+' chapters'+(readCount?' · '+readCount+' dibaca':'');
+    document.getElementById('dm-ch').innerHTML=c||'<p class="text-[11px] p-2" style="color:var(--text3)">No chapters</p>';
+    document.getElementById('dm').classList.add('show');
+  });
+}
+
+function markChRead(i,url,text){
+  const row=document.getElementById('ch-row-'+i);
+  const txt=document.getElementById('ch-txt-'+i);
+  if(row&&!row.classList.contains('opacity-50')){
+    row.classList.add('opacity-50');
+    txt.classList.add('line-through');
+    txt.textContent=text+' ✓';
+    fetch('/api/read',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'url='+encodeURIComponent(url)});
+  }
+}
+{% if q %}liveSearch();{% endif %}
+</script>
+{% endblock %}
