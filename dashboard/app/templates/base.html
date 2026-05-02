@@ -85,6 +85,10 @@ body{background:var(--bg);color:var(--text)}
 <a href="/history" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='history' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='history' %}color:var(--text2){% endif %}">
 <span class="text-sm">📖</span>History</a>
 
+<p class="text-[10px] uppercase tracking-wider px-3 mt-4 mb-1" style="color:var(--text3)">Anime</p>
+<a href="/anime" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='anime' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='anime' %}color:var(--text2){% endif %}">
+<span class="text-sm">🎬</span>Ongoing Anime</a>
+
 <p class="text-[10px] uppercase tracking-wider px-3 mt-4 mb-1" style="color:var(--text3)">Services</p>
 {% for s in services if services is defined %}
 <a href="/svc/{{ s.slug }}" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='svc_' + s.slug %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='svc_' + s.slug %}color:var(--text2){% endif %}">
