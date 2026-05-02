@@ -2,44 +2,77 @@
 {% block content %}
 <div class="flex items-center justify-between mb-1">
 <h2 class="text-lg sm:text-xl font-bold text-white">🎬 Ongoing Anime</h2>
-<div class="text-[10px] text-gray-500">{{ total_anime }} anime • {{ total_episodes }} episodes</div>
+<div class="flex gap-2 items-center">
+<span class="text-[10px] text-gray-500 hidden sm:inline">{{ total_anime }} anime • {{ total_episodes }} eps • ⭐ {{ total_bookmarked }} bookmark</span>
 </div>
-<p class="text-gray-500 text-xs mb-4">Anime ongoing dari Otakudesu — klik untuk lihat episode & nonton</p>
+</div>
+<p class="text-gray-500 text-xs mb-3">Anime ongoing dari Otakudesu — bookmark = watchlist notifikasi Discord</p>
 
-<!-- Search -->
-<div class="mb-4">
+<!-- Scrape Info Bar -->
+{% if scrape_info %}
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 mb-4 flex flex-wrap items-center gap-3 text-[10px]">
+<div class="flex items-center gap-1.5">
+<div class="w-2 h-2 bg-emerald-500 rounded-full pg"></div>
+<span class="text-gray-400">Scraper aktif</span>
+</div>
+<div class="text-gray-500">|</div>
+<div><span class="text-gray-500">Terakhir scrape:</span> <span class="text-gray-300">{{ scrape_info.finished_at[:19] if scrape_info.finished_at else "—" }}</span></div>
+<div class="text-gray-500">|</div>
+<div><span class="text-gray-500">Durasi:</span> <span class="text-gray-300">{{ "%.1f"|format(scrape_info.duration_sec) }}s</span></div>
+<div class="text-gray-500">|</div>
+<div><span class="text-gray-500">Next:</span> <span class="text-indigo-400 font-medium">{{ next_scrape }}</span></div>
+<div class="text-gray-500">|</div>
+<div><span class="text-gray-500">Result:</span> <span class="text-gray-300">{{ scrape_info.total_komik }} anime, {{ scrape_info.new_updates }} baru</span></div>
+</div>
+{% endif %}
+
+<!-- Filter & Search -->
+<div class="flex flex-col sm:flex-row gap-2 mb-4">
 <input type="text" id="anime-search" placeholder="Cari anime..." 
-       class="w-full px-3 py-2 bg-gray-900 border border-gray-800 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
-       oninput="filterAnime(this.value)">
+       class="flex-1 px-3 py-2 bg-gray-900 border border-gray-800 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+       oninput="filterAnime()">
+<div class="flex gap-2">
+<button onclick="filterBookmarked()" id="btn-bookmarked" class="px-3 py-2 bg-gray-900 border border-gray-800 hover:border-amber-500/50 text-xs text-gray-400 rounded-lg">⭐ Bookmarked</button>
+<button onclick="filterAll()" id="btn-all" class="px-3 py-2 bg-indigo-600/20 border border-indigo-500/50 text-xs text-indigo-400 rounded-lg">All</button>
+</div>
 </div>
 
 <!-- Anime Grid -->
 <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3" id="anime-grid">
 {% for a in anime_list %}
-<div class="anime-card bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-indigo-500/50 transition-colors cursor-pointer"
-     data-title="{{ a.title|lower }}" onclick="showAnimeDetail({{ a.id }})">
-<div class="relative">
+<div class="anime-card bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-indigo-500/50 transition-colors"
+     data-title="{{ a.title|lower }}" data-bookmarked="{{ '1' if a.bookmarked else '0' }}" data-id="{{ a.id }}">
+<div class="relative cursor-pointer" onclick="showAnimeDetail({{ a.id }})">
 <img src="{{ a.image }}" alt="{{ a.title }}" class="w-full h-44 sm:h-52 object-cover" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 140%22><rect fill=%22%231f2937%22 width=%22100%22 height=%22140%22/><text x=%2250%22 y=%2270%22 text-anchor=%22middle%22 fill=%22%234b5563%22 font-size=%2212%22>No Image</text></svg>'">
 <!-- Episode badge -->
 <div class="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-indigo-600/90 text-white text-[9px] rounded font-medium">
-{{ a.last_episode or a.episode or "?" }}
+{{ a.last_episode or "?" }}
 </div>
+<!-- Bookmark badge -->
+{% if a.bookmarked %}
+<div class="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-amber-500/90 text-white text-[9px] rounded">⭐</div>
+{% endif %}
 <!-- Day badge -->
-{% if a.day %}
-<div class="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-black/70 text-gray-300 text-[9px] rounded">
-{{ a.day }}
-</div>
+{% if a.day and not a.bookmarked %}
+<div class="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-black/70 text-gray-300 text-[9px] rounded">{{ a.day }}</div>
 {% endif %}
 <!-- Score -->
 {% if a.score %}
-<div class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 bg-amber-500/90 text-white text-[9px] rounded font-medium">
-⭐ {{ a.score }}
-</div>
+<div class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 bg-amber-500/90 text-white text-[9px] rounded font-medium">⭐ {{ a.score }}</div>
+{% endif %}
+<!-- No episodes warning -->
+{% if a.ep_count == 0 %}
+<div class="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 bg-red-500/80 text-white text-[9px] rounded">No eps</div>
 {% endif %}
 </div>
 <div class="p-2">
-<h3 class="text-[11px] font-medium text-white line-clamp-2 leading-tight">{{ a.title }}</h3>
-<div class="text-[9px] text-gray-500 mt-1">{{ a.type }} • {{ a.studio or "?" }}</div>
+<h3 class="text-[11px] font-medium text-white line-clamp-2 leading-tight mb-1">{{ a.title }}</h3>
+<div class="flex items-center justify-between">
+<span class="text-[9px] text-gray-500">{{ a.type }} • {{ a.ep_count }} eps</span>
+<button onclick="toggleBookmark({{ a.id }}, this, event)" class="text-sm hover:scale-125 transition-transform" title="Bookmark">
+{{ "⭐" if a.bookmarked else "☆" }}
+</button>
+</div>
 </div>
 </div>
 {% endfor %}
@@ -62,11 +95,57 @@
 </div>
 
 <script>
-function filterAnime(q){
-  q = q.toLowerCase();
+let showBookmarkedOnly = false;
+
+function filterAnime(){
+  const q = document.getElementById('anime-search').value.toLowerCase();
   document.querySelectorAll('.anime-card').forEach(c=>{
-    c.style.display = c.dataset.title.includes(q) ? '' : 'none';
+    const matchTitle = c.dataset.title.includes(q);
+    const matchBookmark = !showBookmarkedOnly || c.dataset.bookmarked === '1';
+    c.style.display = (matchTitle && matchBookmark) ? '' : 'none';
   });
+}
+
+function filterBookmarked(){
+  showBookmarkedOnly = true;
+  document.getElementById('btn-bookmarked').className = 'px-3 py-2 bg-amber-600/20 border border-amber-500/50 text-xs text-amber-400 rounded-lg';
+  document.getElementById('btn-all').className = 'px-3 py-2 bg-gray-900 border border-gray-800 hover:border-indigo-500/50 text-xs text-gray-400 rounded-lg';
+  filterAnime();
+}
+
+function filterAll(){
+  showBookmarkedOnly = false;
+  document.getElementById('btn-all').className = 'px-3 py-2 bg-indigo-600/20 border border-indigo-500/50 text-xs text-indigo-400 rounded-lg';
+  document.getElementById('btn-bookmarked').className = 'px-3 py-2 bg-gray-900 border border-gray-800 hover:border-amber-500/50 text-xs text-gray-400 rounded-lg';
+  filterAnime();
+}
+
+async function toggleBookmark(id, btn, e){
+  e.stopPropagation();
+  const card = btn.closest('.anime-card');
+  const isBookmarked = card.dataset.bookmarked === '1';
+  const action = isBookmarked ? 'remove' : 'add';
+
+  const fd = new FormData();
+  fd.append('anime_id', id);
+  const r = await fetch(`/api/anime/bookmark/${action}`, {method:'POST', body:fd});
+  const d = await r.json();
+  if(d.ok){
+    card.dataset.bookmarked = d.bookmarked ? '1' : '0';
+    btn.textContent = d.bookmarked ? '⭐' : '☆';
+    // Update badge
+    const badges = card.querySelector('.relative');
+    const existingBadge = badges.querySelector('[class*="bg-amber-500"]');
+    if(d.bookmarked && !existingBadge){
+      const badge = document.createElement('div');
+      badge.className = 'absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-amber-500/90 text-white text-[9px] rounded';
+      badge.textContent = '⭐';
+      badges.appendChild(badge);
+    } else if(!d.bookmarked && existingBadge){
+      existingBadge.remove();
+    }
+    filterAnime();
+  }
 }
 
 async function showAnimeDetail(id){
@@ -81,11 +160,18 @@ async function showAnimeDetail(id){
     }
     let genres = (d.genres||[]).map(g=>`<span class="px-1.5 py-0.5 bg-gray-800 rounded text-[9px] text-gray-400">${g}</span>`).join(' ');
     let eps = (d.episodes||[]).map((ep,i)=>`
-      <div class="ep-item flex items-center justify-between py-1.5 px-2 rounded ${i===d.episodes.length-1?'current':''}">
-        <a href="/watch?url=${encodeURIComponent(ep.url)}" class="text-[11px] text-indigo-400 hover:text-indigo-300 truncate flex-1">${ep.text}</a>
+      <div class="ep-item flex items-center justify-between py-1.5 px-2 rounded ${i===d.episodes.length-1?'border-l-2 border-indigo-500 bg-indigo-500/5':''}">
+        <div class="flex items-center gap-1.5 min-w-0 flex-1">
+          <span class="text-[10px] ${ep.watched?'text-emerald-500':'text-gray-600'}">${ep.watched?'✓':'○'}</span>
+          <a href="/watch?url=${encodeURIComponent(ep.url)}" class="text-[11px] ${ep.watched?'text-gray-500 line-through':'text-indigo-400 hover:text-indigo-300'} truncate">${ep.text}</a>
+        </div>
         <span class="text-[9px] text-gray-600 ml-2 flex-shrink-0">${ep.date||''}</span>
       </div>
     `).reverse().join('');
+
+    const bmBtn = d.bookmarked
+      ? `<button onclick="toggleBookmarkModal(${id},this)" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-lg">⭐ Bookmarked</button>`
+      : `<button onclick="toggleBookmarkModal(${id},this)" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">☆ Bookmark</button>`;
 
     document.getElementById('anime-modal-body').innerHTML = `
       <div class="flex gap-3 mb-4">
@@ -99,16 +185,39 @@ async function showAnimeDetail(id){
             <div><b>Hari:</b> ${d.day||'-'}</div>
           </div>
           <div class="flex flex-wrap gap-1 mt-2">${genres}</div>
+          <div class="mt-2">${bmBtn}</div>
         </div>
       </div>
       ${d.synopsis?`<div class="text-[10px] text-gray-500 mb-3 line-clamp-3">${d.synopsis}</div>`:''}
       <div class="text-xs font-medium text-gray-300 mb-2">📺 Episodes (${d.episodes?.length||0})</div>
       <div class="max-h-60 overflow-y-auto space-y-0.5 bg-gray-800/30 rounded-lg p-1">
-        ${eps||'<div class="text-center py-4 text-gray-500 text-xs">Belum ada episode</div>'}
+        ${eps||'<div class="text-center py-4 text-gray-500 text-xs">Belum ada episode — akan di-scrape pada cycle berikutnya</div>'}
       </div>
     `;
   }catch(e){
     document.getElementById('anime-modal-body').innerHTML = `<div class="text-red-400">Error: ${e.message}</div>`;
+  }
+}
+
+async function toggleBookmarkModal(id, btn){
+  const isBookmarked = btn.textContent.includes('⭐');
+  const action = isBookmarked ? 'remove' : 'add';
+  const fd = new FormData();
+  fd.append('anime_id', id);
+  const r = await fetch(`/api/anime/bookmark/${action}`, {method:'POST', body:fd});
+  const d = await r.json();
+  if(d.ok){
+    btn.textContent = d.bookmarked ? '⭐ Bookmarked' : '☆ Bookmark';
+    btn.className = d.bookmarked
+      ? 'px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-lg'
+      : 'px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg';
+    // Update grid card too
+    const card = document.querySelector(`.anime-card[data-id="${id}"]`);
+    if(card){
+      card.dataset.bookmarked = d.bookmarked ? '1' : '0';
+      const starBtn = card.querySelector('button[title="Bookmark"]');
+      if(starBtn) starBtn.textContent = d.bookmarked ? '⭐' : '☆';
+    }
   }
 }
 

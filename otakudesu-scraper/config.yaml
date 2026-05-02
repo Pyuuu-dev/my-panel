@@ -1,14 +1,16 @@
 scraper:
   base_url: "https://otakudesu.blog"
+  # Domain fallback: otakudesu sering ganti domain
+  # Scraper akan auto-detect domain aktif dari list internal
   interval_minutes: 30
   delay: 2
   max_pages: 3
-  detail_limit: 20
+  detail_limit: 75
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-watchlist:
-  - "one piece"
-  - "jujutsu kaisen"
+# Watchlist sekarang otomatis dari bookmark di dashboard
+# Config ini hanya sebagai fallback tambahan
+watchlist: []
 
 discord:
   webhook_url: ""

@@ -247,6 +247,25 @@ def log_uptime(db: sqlite3.Connection, service: str, event: str):
     db.commit()
 
 
+# ── Bookmark-based Watchlist (unified) ──────────────────
+def get_bookmarked_komik_titles(db: sqlite3.Connection) -> list[str]:
+    """Get all bookmarked komik titles (lowercase) for watchlist matching."""
+    rows = db.execute("""
+        SELECT LOWER(k.title) as title FROM bookmarks b
+        JOIN komik k ON b.komik_id = k.id
+    """).fetchall()
+    return [r["title"] for r in rows]
+
+
+def get_bookmarked_anime_titles(db: sqlite3.Connection) -> list[str]:
+    """Get all bookmarked anime titles (lowercase) for watchlist matching."""
+    rows = db.execute("""
+        SELECT LOWER(a.title) as title FROM anime_bookmarks ab
+        JOIN anime a ON ab.anime_id = a.id
+    """).fetchall()
+    return [r["title"] for r in rows]
+
+
 # ── Anime Functions ─────────────────────────────────────
 def upsert_anime(db: sqlite3.Connection, data: dict) -> int:
     """Insert or update an anime record. Returns anime_id."""

@@ -270,14 +270,22 @@ async def run_scrape():
     api_url = config["scraper"]["api_url"]
     detail_limit = config["scraper"].get("detail_limit", 10)
     headers = {"User-Agent": config["scraper"]["user_agent"]}
-    watchlist = [w.lower() for w in config.get("watchlist", [])]
     webhook_cfg = config.get("webhook", {})
     discord_url = webhook_cfg.get("discord_url", "") if webhook_cfg.get("enabled") else ""
+
+    # Watchlist = bookmark dari dashboard + config fallback
+    sys.path.insert(0, "/opt/services/shared")
+    from db import get_db, get_bookmarked_komik_titles
+    db = get_db()
+    watchlist = get_bookmarked_komik_titles(db)
+    db.close()
+    config_watchlist = [w.lower() for w in config.get("watchlist", [])]
+    watchlist = list(set(watchlist + config_watchlist))
 
     prev_state = load_json(STATE_FILE)
     detail_cache = load_json(DETAIL_CACHE_FILE)
 
-    logger.info(f"Starting scrape (komiku.org, {len(watchlist)} watchlist, detail_limit={detail_limit})")
+    logger.info(f"Starting scrape (komiku.org, {len(watchlist)} watchlist/bookmarks, detail_limit={detail_limit})")
 
     max_pages = config["scraper"].get("max_pages", 3)
 
