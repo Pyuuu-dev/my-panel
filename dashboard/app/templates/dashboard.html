@@ -1,0 +1,69 @@
+{% extends "base.html" %}{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h2 class="text-lg sm:text-xl font-bold text-white mb-1">Dashboard</h2>
+<p class="text-gray-500 text-xs mb-4 sm:mb-6">Overview semua service & system resources</p>
+
+{% if msg is defined and msg %}
+<div class="mb-4 p-3 rounded-lg text-sm {% if msg_ok %}bg-emerald-500/10 border border-emerald-500/30 text-emerald-400{% else %}bg-red-500/10 border border-red-500/30 text-red-400{% endif %}">{{ msg }}</div>
+{% endif %}
+
+<!-- System Stats -->
+<div class="grid grid-cols-3 gap-2 sm:gap-3 mb-4 sm:mb-6">
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 sm:p-4">
+<div class="text-[9px] sm:text-[10px] text-gray-500 mb-1">CPU</div>
+<div class="text-base sm:text-lg font-bold text-white">{{ stats.cpu }}%</div>
+<div class="mt-1 w-full bg-gray-800 rounded-full h-1.5"><div class="bg-blue-500 h-1.5 rounded-full" style="width:{{ stats.cpu }}%"></div></div>
+</div>
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 sm:p-4">
+<div class="text-[9px] sm:text-[10px] text-gray-500 mb-1">Memory</div>
+<div class="text-base sm:text-lg font-bold text-white">{{ stats.mem_pct }}%</div>
+<div class="mt-1 w-full bg-gray-800 rounded-full h-1.5"><div class="{% if stats.mem_pct > 85 %}bg-red-500{% else %}bg-emerald-500{% endif %} h-1.5 rounded-full" style="width:{{ stats.mem_pct }}%"></div></div>
+<p class="text-[9px] text-gray-600 mt-1 hidden sm:block">{{ stats.mem_used }}GB / {{ stats.mem_total }}GB</p>
+</div>
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 sm:p-4">
+<div class="text-[9px] sm:text-[10px] text-gray-500 mb-1">Disk</div>
+<div class="text-base sm:text-lg font-bold text-white">{{ stats.disk_pct }}%</div>
+<div class="mt-1 w-full bg-gray-800 rounded-full h-1.5"><div class="bg-purple-500 h-1.5 rounded-full" style="width:{{ stats.disk_pct }}%"></div></div>
+<p class="text-[9px] text-gray-600 mt-1 hidden sm:block">{{ stats.disk_used }}GB / {{ stats.disk_total }}GB</p>
+</div>
+</div>
+
+<!-- Services -->
+<h3 class="text-sm font-medium text-gray-300 mb-3">Services</h3>
+<div class="space-y-3">
+{% for s in services %}
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 sm:p-4">
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+<div class="flex items-center gap-3">
+{% if s.state == "RUNNING" %}<div class="w-3 h-3 bg-emerald-500 rounded-full pg flex-shrink-0"></div>
+{% elif s.state == "FATAL" %}<div class="w-3 h-3 bg-red-500 rounded-full flex-shrink-0"></div>
+{% else %}<div class="w-3 h-3 bg-gray-600 rounded-full flex-shrink-0"></div>{% endif %}
+<div class="min-w-0">
+<a href="/svc/{{ s.slug }}" class="font-medium text-white hover:text-indigo-400 transition-colors text-sm">{{ s.name }}</a>
+<div class="flex items-center gap-2 mt-0.5 flex-wrap">
+<span class="text-[10px] px-1.5 py-0.5 rounded-full {% if s.state=='RUNNING' %}bg-emerald-500/20 text-emerald-400{% elif s.state=='FATAL' %}bg-red-500/20 text-red-400{% else %}bg-gray-700 text-gray-400{% endif %}">{{ s.state }}</span>
+<span class="text-[10px] text-gray-600 hidden sm:inline">{{ s.desc }}</span>
+{% if s.uptime %}<span class="text-[10px] text-gray-600">{{ s.uptime }}</span>{% endif %}
+</div>
+</div>
+</div>
+<div class="flex gap-2 ml-6 sm:ml-0">
+{% if s.state != "RUNNING" %}
+<form method="POST" action="/svc/{{ s.slug }}/start"><button class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded-lg">Start</button></form>
+{% else %}
+<form method="POST" action="/svc/{{ s.slug }}/restart"><button class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg">Restart</button></form>
+<form method="POST" action="/svc/{{ s.slug }}/stop"><button class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs rounded-lg">Stop</button></form>
+{% endif %}
+<a href="/svc/{{ s.slug }}" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">Detail</a>
+</div>
+</div>
+</div>
+{% endfor %}
+</div>
+
+{% if not services %}
+<div class="bg-gray-900 border border-gray-800 border-dashed rounded-xl p-8 text-center">
+<p class="text-gray-500 text-sm">No services configured.</p>
+</div>
+{% endif %}
+{% endblock %}

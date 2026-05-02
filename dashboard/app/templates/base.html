@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="id" class="h-full">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{% block title %}Panel{% endblock %} - Service Manager</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+// Dark/Light mode — check cookie before render to prevent flash
+(function(){
+  const t=document.cookie.match(/theme=(\w+)/);
+  const mode=t?t[1]:'dark';
+  if(mode==='light')document.documentElement.classList.add('light-mode');
+})();
+tailwind.config={darkMode:'class'}
+</script>
+<style>
+/* Dark mode (default) */
+:root{--bg:#030712;--bg2:#111827;--bg3:#1f2937;--border:#1f2937;--text:#f3f4f6;--text2:#9ca3af;--text3:#6b7280}
+.light-mode{--bg:#f9fafb;--bg2:#ffffff;--bg3:#f3f4f6;--border:#e5e7eb;--text:#111827;--text2:#4b5563;--text3:#9ca3af}
+body{background:var(--bg);color:var(--text)}
+.bg-gray-950{background:var(--bg)!important}.bg-gray-900{background:var(--bg2)!important}.bg-gray-800{background:var(--bg3)!important}
+.border-gray-800{border-color:var(--border)!important}.border-gray-700{border-color:var(--border)!important}
+.text-gray-100{color:var(--text)!important}.text-white{color:var(--text)!important}
+.text-gray-400{color:var(--text2)!important}.text-gray-500{color:var(--text3)!important}.text-gray-600{color:var(--text3)!important}
+.light-mode .bg-gray-700{background:#e5e7eb!important}
+.light-mode .text-gray-300{color:#374151!important}
+.light-mode .log-box{background:#f3f4f6;color:#374151}
+.light-mode .placeholder-gray-500::placeholder{color:#9ca3af!important}
+.light-mode input,.light-mode textarea,.light-mode select{color:#111827!important}
+/* Common */
+.log-box{font-family:'Courier New',monospace;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-all;max-height:450px;overflow-y:auto;background:#0f172a;color:#94a3b8;padding:1rem;border-radius:.5rem}
+@keyframes pg{0%,100%{opacity:1}50%{opacity:.4}}.pg{animation:pg 2s infinite}
+.tab-btn{cursor:pointer;padding:.4rem .75rem;font-size:.75rem;border-radius:.5rem .5rem 0 0;transition:all .15s;white-space:nowrap}
+.tab-btn.active{background:var(--bg3);color:var(--text);border-bottom:2px solid #6366f1}
+.tab-btn:not(.active){color:var(--text3)}.tab-btn:not(.active):hover{color:var(--text2);background:var(--bg3)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+#sidebar{transition:transform .2s ease}
+#sidebar-overlay{display:none}
+@media(max-width:768px){
+  #sidebar{transform:translateX(-100%);position:fixed;z-index:40}
+  #sidebar.open{transform:translateX(0)}
+  #sidebar-overlay.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:30}
+  #main-content{margin-left:0!important}
+}
+</style>
+{% block head %}{% endblock %}
+</head>
+<body class="h-full">
+
+<!-- Mobile top bar -->
+<div class="md:hidden fixed top-0 left-0 right-0 z-20 border-b px-3 py-2 flex items-center justify-between" style="background:var(--bg2);border-color:var(--border)">
+<button onclick="toggleSidebar()" class="p-1.5 rounded-lg" style="color:var(--text2)">
+<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+</button>
+<a href="/" class="flex items-center gap-2">
+<div class="w-6 h-6 bg-indigo-600 rounded flex items-center justify-center text-white text-[9px] font-bold">SM</div>
+<span class="text-xs font-bold">Service Manager</span>
+</a>
+<button onclick="toggleTheme()" class="text-lg" id="theme-toggle-mobile">🌙</button>
+</div>
+
+<div class="flex h-full">
+<div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<!-- Sidebar -->
+<aside id="sidebar" class="w-56 flex flex-col fixed h-full z-40" style="background:var(--bg2);border-right:1px solid var(--border)">
+<div class="p-4 flex items-center justify-between" style="border-bottom:1px solid var(--border)">
+<a href="/" class="flex items-center gap-2" onclick="closeSidebar()">
+<div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white text-xs font-bold">SM</div>
+<div><h1 class="text-sm font-bold">Service Manager</h1><p class="text-[10px]" style="color:var(--text3)">VPS Control Panel</p></div>
+</a>
+<button onclick="toggleSidebar()" class="md:hidden p-1 rounded" style="color:var(--text3)">
+<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+</button>
+</div>
+<nav class="flex-1 p-3 space-y-1 overflow-y-auto">
+<p class="text-[10px] uppercase tracking-wider px-3 mb-1" style="color:var(--text3)">Overview</p>
+<a href="/" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='dashboard' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='dashboard' %}color:var(--text2){% endif %}">
+<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z"/></svg>Dashboard</a>
+
+<a href="/bookmarks" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='bookmarks' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='bookmarks' %}color:var(--text2){% endif %}">
+<span class="text-sm">⭐</span>Bookmarks</a>
+<a href="/search" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='search' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='search' %}color:var(--text2){% endif %}">
+<span class="text-sm">🔍</span>Search DB</a>
+<a href="/history" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='history' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='history' %}color:var(--text2){% endif %}">
+<span class="text-sm">📖</span>History</a>
+
+<p class="text-[10px] uppercase tracking-wider px-3 mt-4 mb-1" style="color:var(--text3)">Services</p>
+{% for s in services if services is defined %}
+<a href="/svc/{{ s.slug }}" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='svc_' + s.slug %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='svc_' + s.slug %}color:var(--text2){% endif %}">
+{% if s.state == "RUNNING" %}<div class="w-2 h-2 bg-emerald-500 rounded-full pg"></div>
+{% elif s.state == "FATAL" %}<div class="w-2 h-2 bg-red-500 rounded-full"></div>
+{% else %}<div class="w-2 h-2 rounded-full" style="background:var(--text3)"></div>{% endif %}
+{{ s.name }}</a>
+{% else %}
+<a href="/svc/komik-scraper" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style="color:var(--text2)">
+<div class="w-2 h-2 rounded-full" style="background:var(--text3)"></div>Komik Scraper</a>
+{% endfor %}
+
+<p class="text-[10px] uppercase tracking-wider px-3 mt-4 mb-1" style="color:var(--text3)">Server</p>
+<a href="/server" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='server' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='server' %}color:var(--text2){% endif %}">
+<span class="text-sm">🖥️</span>Monitor</a>
+<a href="/server/cache" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='server_cache' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='server_cache' %}color:var(--text2){% endif %}">
+<span class="text-sm">🗑️</span>Cache</a>
+<a href="/server/optimize" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='server_optimize' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='server_optimize' %}color:var(--text2){% endif %}">
+<span class="text-sm">⚡</span>Optimize</a>
+</nav>
+<div class="p-3" style="border-top:1px solid var(--border)">
+<!-- Theme toggle -->
+<button onclick="toggleTheme()" class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs mb-2 w-full hover:opacity-80" style="color:var(--text2)">
+<span id="theme-icon">🌙</span> <span id="theme-label">Dark Mode</span>
+</button>
+<a href="/settings" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs mb-2 {% if page is defined and page=='settings' %}bg-indigo-600/20 text-indigo-400{% endif %}" style="{% if page!='settings' %}color:var(--text3){% endif %}">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35"/></svg>Settings</a>
+<div class="flex items-center justify-between px-3">
+<span class="text-[10px]" style="color:var(--text3)">{{ user }}</span>
+<a href="/logout" class="text-[10px] hover:text-red-400" style="color:var(--text3)">Logout</a>
+</div>
+</div>
+</aside>
+
+<main id="main-content" class="flex-1 ml-56 overflow-y-auto">
+<div class="p-4 md:p-6 max-w-5xl pt-14 md:pt-6">{% block content %}{% endblock %}</div>
+</main>
+</div>
+
+<script>
+function toggleSidebar(){
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+function closeSidebar(){
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+function switchTab(g,n){
+  document.querySelectorAll('[data-tab-group="'+g+'"]').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('[data-tab-btn-group="'+g+'"]').forEach(b=>b.classList.remove('active'));
+  document.querySelector('[data-tab-group="'+g+'"][data-tab="'+n+'"]').classList.add('active');
+  document.querySelector('[data-tab-btn-group="'+g+'"][data-tab-btn="'+n+'"]').classList.add('active');
+  // Auto-scroll logs to bottom when switching to logs tab
+  setTimeout(scrollLogs,50);
+}
+function scrollLogs(){
+  document.querySelectorAll('.log-box,#log-friendly').forEach(el=>el.scrollTop=el.scrollHeight);
+}
+scrollLogs();
+
+// Theme toggle
+function toggleTheme(){
+  const isLight=document.documentElement.classList.toggle('light-mode');
+  document.cookie='theme='+(isLight?'light':'dark')+';path=/;max-age=31536000';
+  updateThemeUI();
+}
+function updateThemeUI(){
+  const isLight=document.documentElement.classList.contains('light-mode');
+  const icons=document.querySelectorAll('#theme-icon');
+  const labels=document.querySelectorAll('#theme-label');
+  const mob=document.getElementById('theme-toggle-mobile');
+  icons.forEach(e=>e.textContent=isLight?'☀️':'🌙');
+  labels.forEach(e=>e.textContent=isLight?'Light Mode':'Dark Mode');
+  if(mob)mob.textContent=isLight?'☀️':'🌙';
+}
+updateThemeUI();
+</script>
+</body>
+</html>

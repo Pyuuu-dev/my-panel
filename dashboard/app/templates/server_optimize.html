@@ -1,0 +1,213 @@
+{% extends "base.html" %}{% block title %}VPS Optimization{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-1">
+<h2 class="text-lg sm:text-xl font-bold text-white">⚡ VPS Optimization</h2>
+<div class="flex gap-2">
+<a href="/server" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">← Monitor</a>
+<a href="/server/cache" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-lg">🗑️ Cache</a>
+</div>
+</div>
+<p class="text-gray-500 text-xs mb-4">Tuning kernel parameters & memory management untuk performa optimal</p>
+
+{% if msg %}
+<div class="mb-4 p-3 rounded-lg text-sm bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">✅ {{ msg }}</div>
+{% endif %}
+
+<!-- Quick Actions -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+<form method="POST" action="/server/optimize/drop-caches" class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-blue-500/50 transition-colors">
+<div class="flex items-center gap-2 mb-2">
+<span class="text-lg">💧</span>
+<div class="text-sm font-medium text-white">Drop Page Cache</div>
+</div>
+<div class="text-[10px] text-gray-500 mb-3">Bebaskan RAM yang dipakai untuk page cache. Aman — kernel akan re-cache sesuai kebutuhan.</div>
+<button class="w-full px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg" onclick="return confirm('Drop page cache? Ini aman tapi mungkin sedikit memperlambat disk I/O sementara.')">Free RAM Now</button>
+</form>
+
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center gap-2 mb-2">
+<span class="text-lg">🔄</span>
+<div class="text-sm font-medium text-white">Swap Status</div>
+</div>
+<div class="text-[10px] text-gray-500 mb-2">
+{% if opt.swap_exists %}
+Swap aktif: {{ opt.swap_size_mb }}MB (/swapfile)
+{% else %}
+Swap tidak ditemukan
+{% endif %}
+</div>
+<form method="POST" action="/server/optimize/swap-resize" class="flex gap-2">
+<select name="size_mb" class="flex-1 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-white">
+<option value="512" {% if opt.swap_size_mb == 512 %}selected{% endif %}>512 MB</option>
+<option value="1024" {% if opt.swap_size_mb == 1024 %}selected{% endif %}>1024 MB</option>
+<option value="2048" {% if opt.swap_size_mb == 2048 %}selected{% endif %}>2048 MB</option>
+<option value="4096" {% if opt.swap_size_mb == 4096 %}selected{% endif %}>4096 MB</option>
+</select>
+<button class="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-lg" onclick="return confirm('Resize swap? Ini akan sementara disable swap (proses mungkin lambat).')">Resize</button>
+</form>
+</div>
+
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center gap-2 mb-2">
+<span class="text-lg">🛡️</span>
+<div class="text-sm font-medium text-white">Fail2Ban</div>
+</div>
+<div class="text-[10px] text-gray-500 mb-2">
+Status: <span class="{% if opt.fail2ban_status == 'active' %}text-emerald-400{% else %}text-red-400{% endif %}">{{ opt.fail2ban_status }}</span>
+</div>
+{% if opt.fail2ban_jails %}
+<div class="text-[10px] text-gray-600">
+Jails: {% for j in opt.fail2ban_jails %}<span class="px-1.5 py-0.5 bg-gray-800 rounded mr-1">{{ j }}</span>{% endfor %}
+</div>
+{% endif %}
+</div>
+</div>
+
+<!-- Kernel Parameters -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
+<div class="text-xs font-medium text-gray-300 mb-1">🔧 Kernel Parameters (sysctl)</div>
+<div class="text-[10px] text-gray-500 mb-4">Tuning ini akan disimpan ke /etc/sysctl.d/99-vps-optimize.conf (persist setelah reboot)</div>
+
+<form method="POST" action="/server/optimize/sysctl">
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+
+<!-- vm.swappiness -->
+<div>
+<label class="flex items-center justify-between mb-1">
+<span class="text-xs text-gray-300">vm.swappiness</span>
+<span class="text-[9px] px-1.5 py-0.5 bg-gray-800 rounded text-gray-500">Current: {{ opt.swappiness }}</span>
+</label>
+<input type="range" name="swappiness" min="0" max="100" value="{{ opt.swappiness }}" class="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" oninput="this.nextElementSibling.textContent=this.value">
+<div class="text-center text-xs text-blue-400 font-medium mt-1">{{ opt.swappiness }}</div>
+<div class="text-[9px] text-gray-600 mt-1">Rendah = kurang swap (lebih responsif). Rekomendasi VPS: 10-20</div>
+</div>
+
+<!-- vm.vfs_cache_pressure -->
+<div>
+<label class="flex items-center justify-between mb-1">
+<span class="text-xs text-gray-300">vm.vfs_cache_pressure</span>
+<span class="text-[9px] px-1.5 py-0.5 bg-gray-800 rounded text-gray-500">Current: {{ opt.vfs_cache_pressure }}</span>
+</label>
+<input type="range" name="vfs_cache_pressure" min="0" max="200" value="{{ opt.vfs_cache_pressure }}" class="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" oninput="this.nextElementSibling.textContent=this.value">
+<div class="text-center text-xs text-blue-400 font-medium mt-1">{{ opt.vfs_cache_pressure }}</div>
+<div class="text-[9px] text-gray-600 mt-1">Rendah = lebih banyak cache inode/dentry. Rekomendasi: 50</div>
+</div>
+
+<!-- vm.dirty_ratio -->
+<div>
+<label class="flex items-center justify-between mb-1">
+<span class="text-xs text-gray-300">vm.dirty_ratio</span>
+<span class="text-[9px] px-1.5 py-0.5 bg-gray-800 rounded text-gray-500">Current: {{ opt.dirty_ratio }}</span>
+</label>
+<input type="range" name="dirty_ratio" min="5" max="60" value="{{ opt.dirty_ratio }}" class="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" oninput="this.nextElementSibling.textContent=this.value">
+<div class="text-center text-xs text-blue-400 font-medium mt-1">{{ opt.dirty_ratio }}</div>
+<div class="text-[9px] text-gray-600 mt-1">Max % RAM untuk dirty pages sebelum flush. Rekomendasi: 10-15</div>
+</div>
+
+<!-- vm.dirty_background_ratio -->
+<div>
+<label class="flex items-center justify-between mb-1">
+<span class="text-xs text-gray-300">vm.dirty_background_ratio</span>
+<span class="text-[9px] px-1.5 py-0.5 bg-gray-800 rounded text-gray-500">Current: {{ opt.dirty_background_ratio }}</span>
+</label>
+<input type="range" name="dirty_bg_ratio" min="1" max="30" value="{{ opt.dirty_background_ratio }}" class="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" oninput="this.nextElementSibling.textContent=this.value">
+<div class="text-center text-xs text-blue-400 font-medium mt-1">{{ opt.dirty_background_ratio }}</div>
+<div class="text-[9px] text-gray-600 mt-1">Background flush threshold. Rekomendasi: 3-5</div>
+</div>
+
+</div>
+
+<div class="flex items-center justify-between">
+<div class="text-[10px] text-gray-600">
+<span class="text-amber-400">⚠️</span> Perubahan langsung aktif dan persist setelah reboot
+</div>
+<button class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded-lg font-medium">💾 Apply Sysctl</button>
+</div>
+</form>
+</div>
+
+<!-- Network Tuning (read-only info) -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
+<div class="text-xs font-medium text-gray-300 mb-3">🌐 Network Parameters (Info)</div>
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+<div class="bg-gray-800 rounded-lg p-3">
+<div class="text-[9px] text-gray-500">tcp_tw_reuse</div>
+<div class="text-sm font-medium {% if opt.tcp_tw_reuse == '1' %}text-emerald-400{% else %}text-gray-400{% endif %}">{{ opt.tcp_tw_reuse }}</div>
+</div>
+<div class="bg-gray-800 rounded-lg p-3">
+<div class="text-[9px] text-gray-500">tcp_fin_timeout</div>
+<div class="text-sm font-medium text-gray-300">{{ opt.tcp_fin_timeout }}s</div>
+</div>
+<div class="bg-gray-800 rounded-lg p-3">
+<div class="text-[9px] text-gray-500">somaxconn</div>
+<div class="text-sm font-medium text-gray-300">{{ opt.somaxconn }}</div>
+</div>
+<div class="bg-gray-800 rounded-lg p-3">
+<div class="text-[9px] text-gray-500">overcommit_memory</div>
+<div class="text-sm font-medium text-gray-300">{{ opt.overcommit_memory }}</div>
+</div>
+</div>
+</div>
+
+<!-- Running Services -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="text-xs font-medium text-gray-300">🔄 Running Services ({{ opt.running_services|length }})</div>
+<div class="text-[10px] text-gray-500">systemctl list-units --state=running</div>
+</div>
+<div class="flex flex-wrap gap-1.5">
+{% for svc in opt.running_services %}
+<span class="px-2 py-1 text-[10px] rounded-lg {% if svc in ['apache2', 'supervisor', 'ssh', 'fail2ban'] %}bg-emerald-500/10 border border-emerald-500/30 text-emerald-400{% elif svc in ['tat_agent', 'iscsid'] %}bg-amber-500/10 border border-amber-500/30 text-amber-400{% else %}bg-gray-800 border border-gray-700 text-gray-400{% endif %}">{{ svc }}</span>
+{% endfor %}
+</div>
+<div class="mt-3 text-[10px] text-gray-600">
+<span class="text-emerald-400">●</span> Essential &nbsp;
+<span class="text-amber-400">●</span> Optional (bisa di-disable) &nbsp;
+<span class="text-gray-400">●</span> System
+</div>
+</div>
+
+<!-- Optimization Presets -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mt-4">
+<div class="text-xs font-medium text-gray-300 mb-3">🎯 Quick Presets</div>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+
+<form method="POST" action="/server/optimize/sysctl">
+<input type="hidden" name="swappiness" value="10">
+<input type="hidden" name="vfs_cache_pressure" value="50">
+<input type="hidden" name="dirty_ratio" value="10">
+<input type="hidden" name="dirty_bg_ratio" value="3">
+<button class="w-full p-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-emerald-500/50 rounded-xl text-left transition-colors">
+<div class="text-sm font-medium text-emerald-400 mb-1">🚀 Low RAM VPS</div>
+<div class="text-[10px] text-gray-500">Swappiness=10, VFS=50, Dirty=10/3</div>
+<div class="text-[9px] text-gray-600 mt-1">Optimal untuk VPS 2GB RAM</div>
+</button>
+</form>
+
+<form method="POST" action="/server/optimize/sysctl">
+<input type="hidden" name="swappiness" value="1">
+<input type="hidden" name="vfs_cache_pressure" value="50">
+<input type="hidden" name="dirty_ratio" value="5">
+<input type="hidden" name="dirty_bg_ratio" value="2">
+<button class="w-full p-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-blue-500/50 rounded-xl text-left transition-colors">
+<div class="text-sm font-medium text-blue-400 mb-1">⚡ Aggressive</div>
+<div class="text-[10px] text-gray-500">Swappiness=1, VFS=50, Dirty=5/2</div>
+<div class="text-[9px] text-gray-600 mt-1">Minimal swap, max responsiveness</div>
+</button>
+</form>
+
+<form method="POST" action="/server/optimize/sysctl">
+<input type="hidden" name="swappiness" value="60">
+<input type="hidden" name="vfs_cache_pressure" value="100">
+<input type="hidden" name="dirty_ratio" value="20">
+<input type="hidden" name="dirty_bg_ratio" value="10">
+<button class="w-full p-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-gray-500/50 rounded-xl text-left transition-colors">
+<div class="text-sm font-medium text-gray-400 mb-1">🔄 Default</div>
+<div class="text-[10px] text-gray-500">Swappiness=60, VFS=100, Dirty=20/10</div>
+<div class="text-[9px] text-gray-600 mt-1">Reset ke default Linux</div>
+</button>
+</form>
+
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,191 @@
+{% extends "base.html" %}{% block title %}Cache Manager{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-1">
+<h2 class="text-lg sm:text-xl font-bold text-white">🗑️ Cache & Cleanup</h2>
+<div class="flex gap-2">
+<a href="/server" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">← Monitor</a>
+<a href="/server/optimize" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-lg">⚡ Optimize</a>
+</div>
+</div>
+<p class="text-gray-500 text-xs mb-4">Bersihkan cache & file tidak terpakai untuk menghemat disk</p>
+
+{% if msg %}
+<div class="mb-4 p-3 rounded-lg text-sm bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">✅ {{ msg }}</div>
+{% endif %}
+
+<!-- Total Reclaimable -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
+<div class="flex items-center justify-between">
+<div>
+<div class="text-xs text-gray-500 mb-1">Total Reclaimable Space</div>
+<div class="text-2xl font-bold text-amber-400">{{ cache.total.human }}</div>
+<div class="text-[10px] text-gray-600 mt-1">Bersihkan semua cache untuk membebaskan ruang disk</div>
+</div>
+<form method="POST" action="/server/cache/clean">
+<input type="hidden" name="target" value="all">
+<button class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg font-medium" onclick="return confirm('Bersihkan SEMUA cache? Ini aman dan tidak menghapus data penting.')">🧹 Clean All</button>
+</form>
+</div>
+</div>
+
+<!-- Cache Items Grid -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+
+<!-- APT Cache -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="flex items-center gap-2">
+<span class="text-lg">📦</span>
+<div>
+<div class="text-sm font-medium text-white">APT Cache</div>
+<div class="text-[10px] text-gray-500">/var/cache/apt/archives</div>
+</div>
+</div>
+<span class="text-sm font-bold {% if cache.apt_cache.bytes > 50*1024*1024 %}text-red-400{% elif cache.apt_cache.bytes > 20*1024*1024 %}text-amber-400{% else %}text-emerald-400{% endif %}">{{ cache.apt_cache.human }}</span>
+</div>
+<div class="w-full bg-gray-800 rounded-full h-1.5 mb-3">
+<div class="bg-amber-500 h-1.5 rounded-full" style="width:{{ [cache.apt_cache.bytes / (200*1024*1024) * 100, 100]|min }}%"></div>
+</div>
+<div class="text-[10px] text-gray-600 mb-3">Package .deb files yang sudah terinstall. Aman untuk dihapus.</div>
+<form method="POST" action="/server/cache/clean">
+<input type="hidden" name="target" value="apt">
+<button class="w-full px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">Clean APT Cache</button>
+</form>
+</div>
+
+<!-- Pip Cache -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="flex items-center gap-2">
+<span class="text-lg">🐍</span>
+<div>
+<div class="text-sm font-medium text-white">Pip Cache</div>
+<div class="text-[10px] text-gray-500">~/.cache/pip</div>
+</div>
+</div>
+<span class="text-sm font-bold {% if cache.pip_cache.bytes > 100*1024*1024 %}text-red-400{% elif cache.pip_cache.bytes > 50*1024*1024 %}text-amber-400{% else %}text-emerald-400{% endif %}">{{ cache.pip_cache.human }}</span>
+</div>
+<div class="w-full bg-gray-800 rounded-full h-1.5 mb-3">
+<div class="bg-blue-500 h-1.5 rounded-full" style="width:{{ [cache.pip_cache.bytes / (300*1024*1024) * 100, 100]|min }}%"></div>
+</div>
+<div class="text-[10px] text-gray-600 mb-3">Python package download cache. Aman dihapus, pip akan re-download jika perlu.</div>
+<form method="POST" action="/server/cache/clean">
+<input type="hidden" name="target" value="pip">
+<button class="w-full px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">Clean Pip Cache</button>
+</form>
+</div>
+
+<!-- Journal Logs -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="flex items-center gap-2">
+<span class="text-lg">📋</span>
+<div>
+<div class="text-sm font-medium text-white">Journal Logs</div>
+<div class="text-[10px] text-gray-500">systemd-journald</div>
+</div>
+</div>
+<span class="text-sm font-bold {% if cache.journal.bytes > 100*1024*1024 %}text-red-400{% elif cache.journal.bytes > 50*1024*1024 %}text-amber-400{% else %}text-emerald-400{% endif %}">{{ cache.journal.human }}</span>
+</div>
+<div class="w-full bg-gray-800 rounded-full h-1.5 mb-3">
+<div class="bg-purple-500 h-1.5 rounded-full" style="width:{{ [cache.journal.bytes / (200*1024*1024) * 100, 100]|min }}%"></div>
+</div>
+<div class="text-[10px] text-gray-600 mb-3">System journal logs. Akan di-vacuum ke 20MB, log lama dihapus.</div>
+<form method="POST" action="/server/cache/clean">
+<input type="hidden" name="target" value="journal">
+<button class="w-full px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">Vacuum Journals</button>
+</form>
+</div>
+
+<!-- /tmp -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="flex items-center gap-2">
+<span class="text-lg">📁</span>
+<div>
+<div class="text-sm font-medium text-white">Temp Files</div>
+<div class="text-[10px] text-gray-500">/tmp</div>
+</div>
+</div>
+<span class="text-sm font-bold {% if cache.tmp.bytes > 200*1024*1024 %}text-red-400{% elif cache.tmp.bytes > 100*1024*1024 %}text-amber-400{% else %}text-emerald-400{% endif %}">{{ cache.tmp.human }}</span>
+</div>
+<div class="w-full bg-gray-800 rounded-full h-1.5 mb-3">
+<div class="bg-emerald-500 h-1.5 rounded-full" style="width:{{ [cache.tmp.bytes / (500*1024*1024) * 100, 100]|min }}%"></div>
+</div>
+<div class="text-[10px] text-gray-600 mb-3">File temporary >1 hari. Folder /tmp/opencode tidak akan dihapus.</div>
+<form method="POST" action="/server/cache/clean">
+<input type="hidden" name="target" value="tmp">
+<button class="w-full px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">Clean Temp Files</button>
+</form>
+</div>
+
+<!-- /var/log -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="flex items-center gap-2">
+<span class="text-lg">📝</span>
+<div>
+<div class="text-sm font-medium text-white">System Logs</div>
+<div class="text-[10px] text-gray-500">/var/log</div>
+</div>
+</div>
+<span class="text-sm font-bold {% if cache.var_log.bytes > 200*1024*1024 %}text-red-400{% elif cache.var_log.bytes > 100*1024*1024 %}text-amber-400{% else %}text-emerald-400{% endif %}">{{ cache.var_log.human }}</span>
+</div>
+<div class="w-full bg-gray-800 rounded-full h-1.5 mb-3">
+<div class="bg-red-500 h-1.5 rounded-full" style="width:{{ [cache.var_log.bytes / (500*1024*1024) * 100, 100]|min }}%"></div>
+</div>
+<div class="text-[10px] text-gray-600 mb-3">Log files >10MB akan di-truncate ke 1MB. Log kecil tidak diubah.</div>
+<form method="POST" action="/server/cache/clean">
+<input type="hidden" name="target" value="logs">
+<button class="w-full px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">Truncate Large Logs</button>
+</form>
+</div>
+
+<!-- Service Logs -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="flex items-center gap-2">
+<span class="text-lg">⚙️</span>
+<div>
+<div class="text-sm font-medium text-white">Service Logs</div>
+<div class="text-[10px] text-gray-500">/opt/services/logs</div>
+</div>
+</div>
+<span class="text-sm font-bold text-emerald-400">{{ cache.svc_logs.human }}</span>
+</div>
+<div class="w-full bg-gray-800 rounded-full h-1.5 mb-3">
+<div class="bg-indigo-500 h-1.5 rounded-full" style="width:{{ [cache.svc_logs.bytes / (50*1024*1024) * 100, 100]|min }}%"></div>
+</div>
+<div class="text-[10px] text-gray-600 mb-3">Log scraper >5MB akan di-trim ke 500 baris terakhir.</div>
+<form method="POST" action="/server/cache/clean">
+<input type="hidden" name="target" value="svc_logs">
+<button class="w-full px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">Trim Service Logs</button>
+</form>
+</div>
+
+</div>
+
+<!-- Disk Usage Breakdown -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mt-4">
+<div class="text-xs font-medium text-gray-300 mb-3">💾 Disk Usage Breakdown</div>
+<div class="space-y-2">
+{% set items = [
+  ("APT Cache", cache.apt_cache.bytes, "bg-amber-500"),
+  ("Pip Cache", cache.pip_cache.bytes, "bg-blue-500"),
+  ("Journal", cache.journal.bytes, "bg-purple-500"),
+  ("Temp Files", cache.tmp.bytes, "bg-emerald-500"),
+  ("System Logs", cache.var_log.bytes, "bg-red-500"),
+  ("Service Logs", cache.svc_logs.bytes, "bg-indigo-500"),
+] %}
+{% for name, bytes, color in items %}
+<div class="flex items-center gap-3">
+<div class="w-24 text-[10px] text-gray-400">{{ name }}</div>
+<div class="flex-1 bg-gray-800 rounded-full h-2">
+<div class="{{ color }} h-2 rounded-full" style="width:{{ [bytes / cache.total.bytes * 100, 100]|min if cache.total.bytes > 0 else 0 }}%"></div>
+</div>
+<div class="w-16 text-right text-[10px] text-gray-500">{{ "%.1f"|format(bytes/1024/1024) }} MB</div>
+</div>
+{% endfor %}
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,39 @@
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Database (contains user data)
+*.db
+*.db-journal
+*.db-wal
+
+# Logs
+logs/*.log
+*.log
+
+# Output files (scraped data, regenerated on each run)
+*/output/*.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets (if any)
+.env
+*.env
+
+# Temp
+/tmp/
+*.tmp

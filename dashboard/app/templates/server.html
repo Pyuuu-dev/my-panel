@@ -1,0 +1,259 @@
+{% extends "base.html" %}{% block title %}Server Monitor{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-1">
+<h2 class="text-lg sm:text-xl font-bold text-white">🖥️ Server Monitor</h2>
+<div class="flex gap-2">
+<a href="/server/cache" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-lg">🗑️ Cache</a>
+<a href="/server/optimize" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-lg">⚡ Optimize</a>
+</div>
+</div>
+<p class="text-gray-500 text-xs mb-4">Realtime monitoring VPS — auto-refresh setiap 5 detik</p>
+
+<!-- System Overview Cards -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4">
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+<div class="text-[9px] text-gray-500 mb-1">⏱️ Uptime</div>
+<div class="text-sm font-bold text-white">{{ info.uptime_str }}</div>
+<div class="text-[9px] text-gray-600 mt-0.5">Boot: {{ info.boot_time }}</div>
+</div>
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+<div class="text-[9px] text-gray-500 mb-1">🔧 CPU</div>
+<div class="text-sm font-bold text-white">{{ info.cpu_count }} cores @ {{ info.cpu_freq|int }}MHz</div>
+<div class="text-[9px] text-gray-600 mt-0.5">Load: {{ info.load1 }} / {{ info.load5 }} / {{ info.load15 }}</div>
+</div>
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+<div class="text-[9px] text-gray-500 mb-1">🌐 Network Sent</div>
+<div class="text-sm font-bold text-white" id="net-sent">{{ info.net_sent }} GB</div>
+<div class="text-[9px] text-gray-600 mt-0.5">{{ info.net_packets_sent|int }} packets</div>
+</div>
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+<div class="text-[9px] text-gray-500 mb-1">🌐 Network Recv</div>
+<div class="text-sm font-bold text-white" id="net-recv">{{ info.net_recv }} GB</div>
+<div class="text-[9px] text-gray-600 mt-0.5">{{ info.net_packets_recv|int }} packets</div>
+</div>
+</div>
+
+<!-- Resource Gauges -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+<!-- CPU -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+<div class="text-[10px] text-gray-500 mb-2">CPU Usage</div>
+<div class="relative w-20 h-20 mx-auto">
+<svg class="w-20 h-20 -rotate-90" viewBox="0 0 36 36">
+<path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--bg3)" stroke-width="3"/>
+<path id="cpu-ring" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#3b82f6" stroke-width="3" stroke-dasharray="{{ info.cpu_pct }}, 100"/>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center">
+<span class="text-lg font-bold text-white" id="cpu-val">{{ info.cpu_pct }}%</span>
+</div>
+</div>
+<div class="text-[9px] text-gray-600 mt-2">
+{% for pct in info.cpu_per_core %}Core {{ loop.index0 }}: {{ pct }}%{% if not loop.last %} | {% endif %}{% endfor %}
+</div>
+</div>
+
+<!-- Memory -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+<div class="text-[10px] text-gray-500 mb-2">Memory</div>
+<div class="relative w-20 h-20 mx-auto">
+<svg class="w-20 h-20 -rotate-90" viewBox="0 0 36 36">
+<path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--bg3)" stroke-width="3"/>
+<path id="mem-ring" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="{% if info.mem_pct > 85 %}#ef4444{% else %}#10b981{% endif %}" stroke-width="3" stroke-dasharray="{{ info.mem_pct }}, 100"/>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center">
+<span class="text-lg font-bold text-white" id="mem-val">{{ info.mem_pct }}%</span>
+</div>
+</div>
+<div class="text-[9px] text-gray-600 mt-2" id="mem-detail">{{ info.mem_used }}GB / {{ info.mem_total }}GB</div>
+<div class="text-[9px] text-gray-600">Avail: {{ info.mem_available }}GB | Cached: {{ info.mem_cached }}GB</div>
+</div>
+
+<!-- Swap -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+<div class="text-[10px] text-gray-500 mb-2">Swap</div>
+<div class="relative w-20 h-20 mx-auto">
+<svg class="w-20 h-20 -rotate-90" viewBox="0 0 36 36">
+<path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--bg3)" stroke-width="3"/>
+<path id="swap-ring" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="{% if info.swap_pct > 70 %}#f59e0b{% else %}#8b5cf6{% endif %}" stroke-width="3" stroke-dasharray="{{ info.swap_pct }}, 100"/>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center">
+<span class="text-lg font-bold text-white" id="swap-val">{{ info.swap_pct }}%</span>
+</div>
+</div>
+<div class="text-[9px] text-gray-600 mt-2" id="swap-detail">{{ info.swap_used }}GB / {{ info.swap_total }}GB</div>
+</div>
+
+<!-- Disk -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+<div class="text-[10px] text-gray-500 mb-2">Disk (/)</div>
+<div class="relative w-20 h-20 mx-auto">
+<svg class="w-20 h-20 -rotate-90" viewBox="0 0 36 36">
+<path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="var(--bg3)" stroke-width="3"/>
+<path id="disk-ring" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#a855f7" stroke-width="3" stroke-dasharray="{{ info.disk_pct }}, 100"/>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center">
+<span class="text-lg font-bold text-white" id="disk-val">{{ info.disk_pct }}%</span>
+</div>
+</div>
+<div class="text-[9px] text-gray-600 mt-2">{{ info.disk_used }}GB / {{ info.disk_total }}GB</div>
+<div class="text-[9px] text-gray-600">Free: {{ info.disk_free }}GB</div>
+</div>
+</div>
+
+<!-- Load Average Chart -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="text-xs font-medium text-gray-300 mb-3">📊 Load Average</div>
+<div class="grid grid-cols-3 gap-2 mb-3">
+<div class="text-center">
+<div class="text-lg font-bold text-blue-400" id="load1">{{ info.load1 }}</div>
+<div class="text-[9px] text-gray-500">1 min</div>
+</div>
+<div class="text-center">
+<div class="text-lg font-bold text-amber-400" id="load5">{{ info.load5 }}</div>
+<div class="text-[9px] text-gray-500">5 min</div>
+</div>
+<div class="text-center">
+<div class="text-lg font-bold text-purple-400" id="load15">{{ info.load15 }}</div>
+<div class="text-[9px] text-gray-500">15 min</div>
+</div>
+</div>
+<div class="w-full bg-gray-800 rounded-full h-2">
+<div class="bg-gradient-to-r from-emerald-500 via-amber-500 to-red-500 h-2 rounded-full transition-all" style="width:{{ [info.load1 / info.cpu_count * 100, 100]|min }}%"></div>
+</div>
+<div class="flex justify-between text-[9px] text-gray-600 mt-1">
+<span>0%</span><span>{{ info.cpu_count }} cores = 100%</span>
+</div>
+</div>
+
+<!-- CPU History Chart -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="text-xs font-medium text-gray-300 mb-3">📈 CPU History (last 60s)</div>
+<canvas id="cpuChart" height="120"></canvas>
+</div>
+</div>
+
+<!-- Process Table -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+<div class="flex items-center justify-between mb-3">
+<div class="text-xs font-medium text-gray-300">🔄 Top Processes ({{ info.total_procs }} total)</div>
+<button onclick="refreshProcs()" class="text-[10px] px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-gray-300">Refresh</button>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-xs">
+<thead>
+<tr class="text-gray-500 text-[10px] border-b border-gray-800">
+<th class="text-left py-1.5 px-2">PID</th>
+<th class="text-left py-1.5 px-2">Process</th>
+<th class="text-right py-1.5 px-2">MEM</th>
+<th class="text-right py-1.5 px-2">MEM MB</th>
+<th class="text-right py-1.5 px-2">CPU</th>
+<th class="text-left py-1.5 px-2">Status</th>
+</tr>
+</thead>
+<tbody id="proc-table">
+{% for p in info.processes %}
+<tr class="border-b border-gray-800/50 hover:bg-gray-800/30">
+<td class="py-1.5 px-2 text-gray-500">{{ p.pid }}</td>
+<td class="py-1.5 px-2 text-white font-medium">{{ p.name }}</td>
+<td class="py-1.5 px-2 text-right {% if p.mem_pct > 10 %}text-red-400{% elif p.mem_pct > 5 %}text-amber-400{% else %}text-gray-300{% endif %}">{{ p.mem_pct }}%</td>
+<td class="py-1.5 px-2 text-right text-gray-400">{{ p.mem_mb }} MB</td>
+<td class="py-1.5 px-2 text-right text-gray-400">{{ p.cpu_pct }}%</td>
+<td class="py-1.5 px-2"><span class="px-1.5 py-0.5 rounded text-[9px] {% if p.status == 'running' %}bg-emerald-500/20 text-emerald-400{% elif p.status == 'sleeping' %}bg-blue-500/20 text-blue-400{% else %}bg-gray-700 text-gray-400{% endif %}">{{ p.status }}</span></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</div>
+
+<script>
+// CPU History Chart
+const cpuData = [];
+const cpuLabels = [];
+for(let i=0;i<60;i++){cpuData.push(0);cpuLabels.push('');}
+cpuData[59] = {{ info.cpu_pct }};
+
+const ctx = document.getElementById('cpuChart').getContext('2d');
+const cpuChart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: cpuLabels,
+    datasets: [{
+      data: cpuData,
+      borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59,130,246,0.1)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 1.5,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {legend:{display:false}},
+    scales: {
+      x: {display:false},
+      y: {min:0, max:100, ticks:{font:{size:9},color:'#6b7280'}, grid:{color:'rgba(107,114,128,0.1)'}}
+    }
+  }
+});
+
+// Auto-refresh every 5 seconds
+async function refreshStats(){
+  try{
+    const r = await fetch('/api/server/stats');
+    const d = await r.json();
+    if(d.error) return;
+
+    // Update values
+    document.getElementById('cpu-val').textContent = d.cpu_pct+'%';
+    document.getElementById('cpu-ring').setAttribute('stroke-dasharray', d.cpu_pct+', 100');
+    document.getElementById('mem-val').textContent = d.mem_pct+'%';
+    document.getElementById('mem-ring').setAttribute('stroke-dasharray', d.mem_pct+', 100');
+    document.getElementById('mem-ring').setAttribute('stroke', d.mem_pct>85?'#ef4444':'#10b981');
+    document.getElementById('mem-detail').textContent = d.mem_used_gb+'GB / {{ info.mem_total }}GB';
+    document.getElementById('swap-val').textContent = d.swap_pct+'%';
+    document.getElementById('swap-ring').setAttribute('stroke-dasharray', d.swap_pct+', 100');
+    document.getElementById('swap-detail').textContent = d.swap_used_gb+'GB / {{ info.swap_total }}GB';
+    document.getElementById('disk-val').textContent = d.disk_pct+'%';
+    document.getElementById('disk-ring').setAttribute('stroke-dasharray', d.disk_pct+', 100');
+    document.getElementById('load1').textContent = d.load1;
+    document.getElementById('load5').textContent = d.load5;
+    document.getElementById('load15').textContent = d.load15;
+    document.getElementById('net-sent').textContent = d.net_sent_gb+' GB';
+    document.getElementById('net-recv').textContent = d.net_recv_gb+' GB';
+
+    // Update chart
+    cpuData.push(d.cpu_pct);
+    cpuData.shift();
+    cpuChart.update('none');
+  }catch(e){}
+}
+
+async function refreshProcs(){
+  try{
+    const r = await fetch('/api/server/processes');
+    const procs = await r.json();
+    const tbody = document.getElementById('proc-table');
+    tbody.innerHTML = procs.map(p => `
+      <tr class="border-b border-gray-800/50 hover:bg-gray-800/30">
+        <td class="py-1.5 px-2 text-gray-500">${p.pid}</td>
+        <td class="py-1.5 px-2 text-white font-medium">${p.name}</td>
+        <td class="py-1.5 px-2 text-right ${p.mem_pct>10?'text-red-400':p.mem_pct>5?'text-amber-400':'text-gray-300'}">${p.mem_pct}%</td>
+        <td class="py-1.5 px-2 text-right text-gray-400">${p.mem_mb} MB</td>
+        <td class="py-1.5 px-2 text-right text-gray-400">${p.cpu_pct}%</td>
+        <td class="py-1.5 px-2"><span class="px-1.5 py-0.5 rounded text-[9px] ${p.status==='running'?'bg-emerald-500/20 text-emerald-400':p.status==='sleeping'?'bg-blue-500/20 text-blue-400':'bg-gray-700 text-gray-400'}">${p.status}</span></td>
+      </tr>
+    `).join('');
+  }catch(e){}
+}
+
+setInterval(refreshStats, 5000);
+setInterval(refreshProcs, 10000);
+</script>
+{% endblock %}

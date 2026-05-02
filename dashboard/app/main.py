@@ -1,0 +1,1244 @@
+"""Service Manager Dashboard — Fase 1.
+Full SQLite, bookmarks, read tracker, history, password change, rate limiting.
+Server monitoring, cache management, VPS optimization.
+"""
+import json
+import os
+import subprocess
+import sys
+import psutil
+import time as _time
+import xmlrpc.client
+from collections import defaultdict
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import bcrypt
+import yaml
+from fastapi import FastAPI, Request, Form, Query
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, Response, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from jose import jwt, JWTError
+
+# Shared DB
+sys.path.insert(0, "/opt/services/shared")
+from db import get_db, init_db, log_uptime
+
+# ── Config ──────────────────────────────────────────────
+SECRET_KEY = "change-me-to-random-secret-key-2024"
+LOGS_DIR = Path("/opt/services/logs")
+SERVICES_DIR = Path("/opt/services")
+SUPERVISOR_URL = "http://admin:supervisorSecret123!@127.0.0.1:9001/RPC2"
+
+SERVICES = {
+    "komik-scraper": {
+        "name": "KomikIndo",
+        "desc": "Scrape update komik dari komikindo.ch",
+        "config_path": SERVICES_DIR / "komik-scraper" / "config.yaml",
+        "output_path": SERVICES_DIR / "komik-scraper" / "output",
+        "latest_file": "latest.json",
+        "source": "komikindo",
+    },
+    "komiku-scraper": {
+        "name": "Komiku",
+        "desc": "Scrape update komik dari komiku.org",
+        "config_path": SERVICES_DIR / "komiku-scraper" / "config.yaml",
+        "output_path": SERVICES_DIR / "komiku-scraper" / "output",
+        "latest_file": "latest.json",
+        "source": "komiku",
+    },
+}
+
+# ── Rate Limiter ────────────────────────────────────────
+_rate_store: dict[str, list[float]] = defaultdict(list)
+
+def check_rate_limit(ip: str, limit: int = 60, window: int = 60) -> bool:
+    """Returns True if request is allowed."""
+    now = _time.time()
+    _rate_store[ip] = [t for t in _rate_store[ip] if now - t < window]
+    if len(_rate_store[ip]) >= limit:
+        return False
+    _rate_store[ip].append(now)
+    return True
+
+# ── Supervisor ──────────────────────────────────────────
+def sup():
+    return xmlrpc.client.ServerProxy(SUPERVISOR_URL)
+
+def get_all_services() -> list[dict]:
+    result = []
+    for slug, meta in SERVICES.items():
+        try:
+            p = sup().supervisor.getProcessInfo(slug)
+            state, pid = p["statename"], p["pid"]
+            uptime = p["description"] if state == "RUNNING" else ""
+        except Exception:
+            state, pid, uptime = "UNKNOWN", 0, ""
+        result.append({"slug": slug, **meta, "state": state, "pid": pid, "uptime": uptime})
+    return result
+
+def svc_do(slug: str, action: str) -> tuple[bool, str]:
+    try:
+        s = sup()
+        if action == "start":
+            s.supervisor.startProcess(slug)
+        elif action == "stop":
+            s.supervisor.stopProcess(slug)
+        elif action == "restart":
+            try: s.supervisor.stopProcess(slug)
+            except Exception: pass
+            _time.sleep(0.5)
+            s.supervisor.startProcess(slug)
+        # Log uptime event
+        try:
+            db = get_db()
+            log_uptime(db, slug, action)
+            db.close()
+        except Exception: pass
+        return True, f"{slug} {action}ed."
+    except xmlrpc.client.Fault as e:
+        f = str(e.faultString)
+        if "ALREADY_STARTED" in f: return True, f"{slug} is already running."
+        if "NOT_RUNNING" in f: return True, f"{slug} is already stopped."
+        return False, f"Error: {f}"
+    except Exception as e:
+        return False, f"Error: {e}"
+
+# ── Helpers ─────────────────────────────────────────────
+def sys_stats() -> dict:
+    mem = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    return {
+        "cpu": psutil.cpu_percent(interval=0.3),
+        "mem_used": round(mem.used/1024**3, 2), "mem_total": round(mem.total/1024**3, 2), "mem_pct": mem.percent,
+        "disk_used": round(disk.used/1024**3, 1), "disk_total": round(disk.total/1024**3, 1), "disk_pct": round(disk.percent, 1),
+    }
+
+def read_log(name: str, lines: int = 200) -> str:
+    f = LOGS_DIR / f"{name}.log"
+    if not f.exists(): return "(no log file yet)"
+    try: return "\n".join(f.read_text().splitlines()[-lines:])
+    except Exception as e: return f"Error: {e}"
+
+def get_latest(slug: str) -> dict | None:
+    m = SERVICES.get(slug)
+    if not m: return None
+    p = m["output_path"] / m["latest_file"]
+    if p.exists():
+        try: return json.loads(p.read_text())
+        except Exception: pass
+    return None
+
+def load_svc_config(slug: str) -> dict:
+    m = SERVICES.get(slug)
+    if not m: return {}
+    p = m["config_path"]
+    if p.exists():
+        try: return yaml.safe_load(p.read_text()) or {}
+        except Exception: pass
+    return {}
+
+def save_svc_config(slug: str, cfg: dict):
+    m = SERVICES.get(slug)
+    if m: m["config_path"].write_text(yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
+
+def make_token(u: str) -> str:
+    return jwt.encode({"sub": u, "exp": datetime.now(timezone.utc) + timedelta(hours=24)}, SECRET_KEY, algorithm="HS256")
+
+def get_user(r: Request) -> str | None:
+    t = r.cookies.get("token")
+    if not t: return None
+    try: return jwt.decode(t, SECRET_KEY, algorithms=["HS256"]).get("sub")
+    except JWTError: return None
+
+def parse_log_entries(raw: str) -> list[dict]:
+    entries = []
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line: continue
+        entry = {"raw": line, "level": "info", "time": "", "msg": line}
+        if len(line) > 25 and line[4] == '-' and line[10] == ' ':
+            try:
+                entry["time"] = line[:19]
+                rest = line[20:].strip()
+                if rest.startswith("["):
+                    bracket_end = rest.index("]")
+                    entry["level"] = rest[1:bracket_end].lower()
+                    entry["msg"] = rest[bracket_end+1:].strip()
+                else:
+                    entry["msg"] = rest
+            except (ValueError, IndexError): pass
+        entries.append(entry)
+    return entries
+
+def calc_next_scrape(latest_data: dict | None, cfg: dict) -> str:
+    if not latest_data: return "—"
+    interval = cfg.get("scraper", {}).get("interval_minutes", 30)
+    try:
+        scraped = datetime.fromisoformat(latest_data["scraped_at"])
+        return (scraped + timedelta(minutes=interval)).strftime("%H:%M:%S")
+    except Exception: return "—"
+
+def auto_cleanup(slug: str, keep_days: int = 7):
+    m = SERVICES.get(slug)
+    if not m: return 0
+    cutoff = _time.time() - (keep_days * 86400)
+    removed = 0
+    for f in m["output_path"].glob("komik_*.json"):
+        if f.stat().st_mtime < cutoff:
+            f.unlink(); removed += 1
+    return removed
+
+# ── App ─────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    for slug in SERVICES:
+        cfg = load_svc_config(slug)
+        n = auto_cleanup(slug, cfg.get("cleanup", {}).get("keep_days", 7))
+        if n: print(f"[Cleanup] {slug}: removed {n} old files")
+    yield
+
+app = FastAPI(title="Service Manager", docs_url=None, redoc_url=None, lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+tpl = Jinja2Templates(directory="app/templates")
+
+# ── Rate limit middleware ───────────────────────────────
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    ip = request.client.host if request.client else "unknown"
+    path = request.url.path
+    # Public API: 60/min, authenticated: 200/min
+    if path.startswith("/api/") or path.startswith("/feed/"):
+        if not check_rate_limit(f"pub:{ip}", 60, 60):
+            return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+    else:
+        if not check_rate_limit(f"auth:{ip}", 200, 60):
+            return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+    return await call_next(request)
+
+# ── Auth ────────────────────────────────────────────────
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    if get_user(request): return RedirectResponse("/", 302)
+    return tpl.TemplateResponse(request, "login.html", context={"error": None})
+
+@app.post("/login")
+async def login_post(request: Request, username: str = Form(...), password: str = Form(...)):
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    db.close()
+    if not user or not bcrypt.checkpw(password.encode(), user["password"].encode()):
+        return tpl.TemplateResponse(request, "login.html", context={"error": "Username atau password salah."})
+    resp = RedirectResponse("/", 302)
+    resp.set_cookie("token", make_token(username), httponly=True, max_age=86400, samesite="lax")
+    return resp
+
+@app.get("/logout")
+async def logout():
+    resp = RedirectResponse("/login", 302); resp.delete_cookie("token"); return resp
+
+# ── Dashboard ───────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    return tpl.TemplateResponse(request, "dashboard.html", context={
+        "user": user, "services": get_all_services(), "stats": sys_stats(), "page": "dashboard",
+    })
+
+# ── Service actions ─────────────────────────────────────
+@app.post("/svc/{slug}/start")
+@app.post("/svc/{slug}/stop")
+@app.post("/svc/{slug}/restart")
+async def svc_action(request: Request, slug: str):
+    action = request.url.path.split("/")[-1]
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    ok, msg = svc_do(slug, action)
+    return tpl.TemplateResponse(request, "dashboard.html", context={
+        "user": user, "services": get_all_services(), "stats": sys_stats(),
+        "page": "dashboard", "msg": msg, "msg_ok": ok,
+    })
+
+# ── Service detail ──────────────────────────────────────
+@app.get("/svc/{slug}", response_class=HTMLResponse)
+async def svc_detail(request: Request, slug: str):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    if slug not in SERVICES: return RedirectResponse("/", 302)
+
+    meta = SERVICES[slug]
+    cfg = load_svc_config(slug)
+    latest = get_latest(slug)
+    log_raw = read_log(slug, 200)
+    log_entries = parse_log_entries(log_raw)
+    err_content = read_log(f"{slug}-err", 50)
+
+    files = []
+    if meta["output_path"].exists():
+        for f in sorted(meta["output_path"].glob("komik_*.json"), reverse=True)[:15]:
+            files.append({"name": f.name, "size": f"{f.stat().st_size/1024:.1f} KB",
+                          "time": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M")})
+
+    try:
+        p = sup().supervisor.getProcessInfo(slug)
+        status = {"state": p["statename"], "pid": p["pid"], "uptime": p["description"] if p["statename"]=="RUNNING" else ""}
+    except Exception:
+        status = {"state": "UNKNOWN", "pid": 0, "uptime": ""}
+
+    # Get bookmarks & read status from DB
+    db = get_db()
+    bookmarked_ids = set()
+    read_chapter_urls = set()
+    try:
+        for row in db.execute("SELECT k.title FROM bookmarks b JOIN komik k ON b.komik_id=k.id").fetchall():
+            bookmarked_ids.add(row["title"])
+        for row in db.execute("SELECT c.url FROM read_status r JOIN chapters c ON r.chapter_id=c.id").fetchall():
+            read_chapter_urls.add(row["url"])
+        # Scrape stats (last 7 days)
+        scrape_stats = db.execute("""
+            SELECT date(finished_at) as day, SUM(new_updates) as new_ch, COUNT(*) as runs
+            FROM scrape_runs WHERE source=? AND finished_at > datetime('now','-7 days')
+            GROUP BY day ORDER BY day
+        """, (meta.get("source", "komikindo"),)).fetchall()
+        scrape_stats = [dict(r) for r in scrape_stats]
+        # Uptime
+        uptime_events = db.execute("""
+            SELECT event, timestamp FROM uptime_log WHERE service=?
+            ORDER BY timestamp DESC LIMIT 20
+        """, (slug,)).fetchall()
+        uptime_events = [dict(r) for r in uptime_events]
+    except Exception:
+        scrape_stats = []
+        uptime_events = []
+    finally:
+        db.close()
+
+    server_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    next_scrape = calc_next_scrape(latest, cfg)
+    interval_min = cfg.get("scraper", {}).get("interval_minutes", 30)
+
+    return tpl.TemplateResponse(request, "service_detail.html", context={
+        "user": user, "slug": slug, "meta": meta, "status": status, "cfg": cfg,
+        "latest": latest, "log_entries": log_entries, "log_raw": log_raw, "err_content": err_content,
+        "files": files, "page": "svc_" + slug, "services": get_all_services(),
+        "server_time": server_time, "next_scrape": next_scrape, "interval_min": interval_min,
+        "bookmarked_ids": bookmarked_ids, "read_chapter_urls": read_chapter_urls,
+        "scrape_stats": scrape_stats, "uptime_events": uptime_events,
+    })
+
+# ── Config save ─────────────────────────────────────────
+@app.post("/svc/{slug}/config")
+async def svc_config_save(request: Request, slug: str):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    form = await request.form()
+    cfg = load_svc_config(slug)
+    if "interval_minutes" in form:
+        cfg.setdefault("scraper", {})
+        cfg["scraper"]["interval_minutes"] = int(form.get("interval_minutes", 30))
+        cfg["scraper"]["max_pages"] = int(form.get("max_pages", 2))
+        cfg["scraper"]["delay"] = int(form.get("delay", 3))
+        cfg["scraper"]["detail_limit"] = int(form.get("detail_limit", 20))
+    wl_raw = form.get("watchlist", "")
+    cfg["watchlist"] = [w.strip() for w in wl_raw.split("\n") if w.strip()]
+    cfg.setdefault("webhook", {})
+    cfg["webhook"]["enabled"] = "webhook_enabled" in form
+    cfg["webhook"]["discord_url"] = form.get("discord_url", "").strip()
+    cfg["webhook"]["notify_on_watchlist"] = "notify_watchlist" in form
+    cfg["webhook"]["notify_on_scrape_done"] = "notify_summary" in form
+    # Telegram
+    cfg.setdefault("telegram", {})
+    cfg["telegram"]["enabled"] = "tg_enabled" in form
+    cfg["telegram"]["bot_token"] = form.get("tg_token", "").strip()
+    cfg["telegram"]["chat_id"] = form.get("tg_chat_id", "").strip()
+    # Cleanup
+    cfg.setdefault("cleanup", {})
+    cfg["cleanup"]["keep_days"] = int(form.get("keep_days", 7))
+    save_svc_config(slug, cfg)
+    return RedirectResponse(f"/svc/{slug}?tab=config&msg=Config+saved!+Restart+service+to+apply.", 302)
+
+@app.get("/svc/{slug}/log-raw", response_class=PlainTextResponse)
+async def svc_log_raw(request: Request, slug: str):
+    if not get_user(request): return PlainTextResponse("Unauthorized", 401)
+    return read_log(slug, 500)
+
+# ── Test Webhook ────────────────────────────────────────
+@app.post("/svc/{slug}/test-webhook")
+async def svc_test_webhook(request: Request, slug: str):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    cfg = load_svc_config(slug)
+    url = cfg.get("webhook", {}).get("discord_url", "")
+    if not url:
+        return RedirectResponse(f"/svc/{slug}?tab=config&msg=Webhook+URL+belum+diisi.", 302)
+    import urllib.request
+    svc_name = SERVICES[slug]['name']
+    svc_desc = SERVICES[slug]['desc']
+    embed = {
+        "title": "🧪 Test Webhook Berhasil!",
+        "description": f"Webhook untuk **{svc_name}** terhubung dengan baik.\n\n"
+                       f"📡 **Service:** {svc_name}\n"
+                       f"📝 **Deskripsi:** {svc_desc}\n"
+                       f"👤 **Tested by:** {user}\n"
+                       f"✅ **Status:** Connected",
+        "color": 0x00D4AA,
+        "footer": {"text": "Service Manager • panel.ldctesting.my.id"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        data = json.dumps({"embeds": [embed]}).encode()
+        req = urllib.request.Request(url, data=data, headers={
+            "Content-Type": "application/json", "User-Agent": "ServiceManager/1.0",
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            code = resp.status
+        if code in (200, 204):
+            return RedirectResponse(f"/svc/{slug}?tab=config&msg=Test+webhook+berhasil!+Cek+Discord+kamu.", 302)
+        else:
+            return RedirectResponse(f"/svc/{slug}?tab=config&msg=Discord+returned+{code}", 302)
+    except Exception as e:
+        msg = str(e)[:80].replace(" ", "+")
+        return RedirectResponse(f"/svc/{slug}?tab=config&msg=Error:+{msg}", 302)
+
+# ── Test Telegram ───────────────────────────────────────
+@app.post("/svc/{slug}/test-telegram")
+async def svc_test_telegram(request: Request, slug: str):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    cfg = load_svc_config(slug)
+    tg = cfg.get("telegram", {})
+    token = tg.get("bot_token", "")
+    chat_id = tg.get("chat_id", "")
+    if not token or not chat_id:
+        return RedirectResponse(f"/svc/{slug}?tab=config&msg=Telegram+token+atau+chat_id+belum+diisi.", 302)
+    import urllib.request
+    try:
+        msg_text = f"🧪 Test dari Service Manager\\n\\nService: {slug}\\nTested by: {user}\\nStatus: Connected ✅"
+        api_url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = json.dumps({"chat_id": chat_id, "text": msg_text, "parse_mode": "HTML"}).encode()
+        req = urllib.request.Request(api_url, data=data, headers={
+            "Content-Type": "application/json", "User-Agent": "ServiceManager/1.0",
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        if result.get("ok"):
+            return RedirectResponse(f"/svc/{slug}?tab=config&msg=Test+Telegram+berhasil!+Cek+chat+kamu.", 302)
+        else:
+            return RedirectResponse(f"/svc/{slug}?tab=config&msg=Telegram+error:+{result.get('description','')}", 302)
+    except Exception as e:
+        msg = str(e)[:80].replace(" ", "+")
+        return RedirectResponse(f"/svc/{slug}?tab=config&msg=Telegram+error:+{msg}", 302)
+
+# ── Bookmark API ────────────────────────────────────────
+@app.post("/api/bookmark/{action}")
+async def api_bookmark(request: Request, action: str):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    form = await request.form()
+    title = form.get("title", "")
+    if not title: return JSONResponse({"error": "title required"}, 400)
+
+    db = get_db()
+    try:
+        komik = db.execute("SELECT id FROM komik WHERE title=?", (title,)).fetchone()
+        if not komik:
+            # Create komik entry if not exists
+            db.execute("INSERT INTO komik (title) VALUES (?)", (title,))
+            db.commit()
+            komik = db.execute("SELECT id FROM komik WHERE title=?", (title,)).fetchone()
+
+        kid = komik["id"]
+        if action == "add":
+            db.execute("INSERT OR IGNORE INTO bookmarks (komik_id) VALUES (?)", (kid,))
+        elif action == "remove":
+            db.execute("DELETE FROM bookmarks WHERE komik_id=?", (kid,))
+        db.commit()
+        is_bookmarked = db.execute("SELECT id FROM bookmarks WHERE komik_id=?", (kid,)).fetchone() is not None
+        return JSONResponse({"ok": True, "bookmarked": is_bookmarked})
+    finally:
+        db.close()
+
+# ── Read Status API ─────────────────────────────────────
+@app.post("/api/read")
+async def api_mark_read(request: Request):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    form = await request.form()
+    chapter_url = form.get("url", "")
+    if not chapter_url: return JSONResponse({"error": "url required"}, 400)
+
+    db = get_db()
+    try:
+        ch = db.execute("SELECT id FROM chapters WHERE url=?", (chapter_url,)).fetchone()
+        if ch:
+            db.execute("INSERT OR IGNORE INTO read_status (chapter_id) VALUES (?)", (ch["id"],))
+            db.commit()
+            return JSONResponse({"ok": True, "read": True})
+        return JSONResponse({"ok": False, "msg": "chapter not in DB yet"})
+    finally:
+        db.close()
+
+# ── Change Password ─────────────────────────────────────
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    return tpl.TemplateResponse(request, "settings.html", context={
+        "user": user, "page": "settings", "services": get_all_services(),
+    })
+
+@app.post("/settings/password")
+async def change_password(request: Request, old_password: str = Form(...), new_password: str = Form(...)):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    db = get_db()
+    try:
+        row = db.execute("SELECT password FROM users WHERE username=?", (user,)).fetchone()
+        if not row or not bcrypt.checkpw(old_password.encode(), row["password"].encode()):
+            return tpl.TemplateResponse(request, "settings.html", context={
+                "user": user, "page": "settings", "services": get_all_services(),
+                "error": "Password lama salah.",
+            })
+        if len(new_password) < 4:
+            return tpl.TemplateResponse(request, "settings.html", context={
+                "user": user, "page": "settings", "services": get_all_services(),
+                "error": "Password baru minimal 4 karakter.",
+            })
+        hashed = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE users SET password=? WHERE username=?", (hashed, user))
+        db.commit()
+        return tpl.TemplateResponse(request, "settings.html", context={
+            "user": user, "page": "settings", "services": get_all_services(),
+            "success": "Password berhasil diubah!",
+        })
+    finally:
+        db.close()
+
+# ── Search API (from DB — searches ALL scraped komik) ───
+@app.get("/api/search")
+async def api_search(q: str = Query("", min_length=1), source: str = Query("")):
+    """Search all komik ever scraped from database. Live search."""
+    db = get_db()
+    try:
+        query = f"%{q.strip()}%"
+        if source:
+            rows = db.execute(
+                "SELECT * FROM komik WHERE title LIKE ? AND source=? ORDER BY updated_at DESC LIMIT 50",
+                (query, source)
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM komik WHERE title LIKE ? ORDER BY updated_at DESC LIMIT 50",
+                (query,)
+            ).fetchall()
+
+        results = []
+        for r in rows:
+            chapters = db.execute(
+                "SELECT text, url, date FROM chapters WHERE komik_id=? ORDER BY id DESC LIMIT 5",
+                (r["id"],)
+            ).fetchall()
+            results.append({
+                "id": r["id"],
+                "title": r["title"], "url": r["url"], "image": r["image"],
+                "type": r["type"], "status": r["status"], "rating": r["rating"],
+                "color": bool(r["color"]),
+                "genres": json.loads(r["genres"]) if r["genres"] else [],
+                "author": r["author"], "synopsis": r["synopsis"],
+                "source": r["source"], "alt_title": r["alt_title"],
+                "last_chapter": r["last_chapter"],
+                "chapters": [{"text": c["text"], "url": c["url"], "date": c["date"]} for c in chapters],
+            })
+        return JSONResponse({"query": q, "total": len(results), "results": results})
+    finally:
+        db.close()
+
+# ── Komik Detail API (all chapters + read status) ───────
+@app.get("/api/komik/{komik_id}")
+async def api_komik_detail(komik_id: int):
+    """Get full komik detail with ALL chapters + read status from DB."""
+    db = get_db()
+    try:
+        r = db.execute("SELECT * FROM komik WHERE id=?", (komik_id,)).fetchone()
+        if not r:
+            return JSONResponse({"error": "not found"}, 404)
+        chapters = db.execute("""
+            SELECT c.text, c.url, c.date, 
+                   CASE WHEN rs.id IS NOT NULL THEN 1 ELSE 0 END as is_read
+            FROM chapters c
+            LEFT JOIN read_status rs ON rs.chapter_id = c.id
+            WHERE c.komik_id=? ORDER BY c.id DESC
+        """, (komik_id,)).fetchall()
+        return JSONResponse({
+            "id": r["id"], "title": r["title"], "url": r["url"], "image": r["image"],
+            "type": r["type"], "status": r["status"], "rating": r["rating"],
+            "color": bool(r["color"]),
+            "genres": json.loads(r["genres"]) if r["genres"] else [],
+            "author": r["author"], "artist": r["artist"],
+            "synopsis": r["synopsis"], "alt_title": r["alt_title"],
+            "source": r["source"],
+            "chapters": [{"text": c["text"], "url": c["url"], "date": c["date"], "read": bool(c["is_read"])} for c in chapters],
+        })
+    finally:
+        db.close()
+
+# ── Chapter Reader (on-demand image scrape) ─────────────
+@app.get("/read", response_class=HTMLResponse)
+async def read_chapter(request: Request):
+    """Scrape chapter images on-demand and display in reader page."""
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+
+    chapter_url = request.query_params.get("url", "")
+    if not chapter_url:
+        return RedirectResponse("/", 302)
+
+    import urllib.request
+    from bs4 import BeautifulSoup
+    images = []
+    title_text = "Chapter"
+    error = ""
+
+    try:
+        req = urllib.request.Request(chapter_url, headers={"User-Agent": "ServiceManager/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            html = resp.read().decode()
+
+        soup = BeautifulSoup(html, "html.parser")
+        title_el = soup.select_one("title")
+        title_text = title_el.get_text(strip=True) if title_el else "Chapter"
+
+        for img in soup.select("#Baca_Komik img, .chapter_img img, .reading-content img, .main-reading-area img, img.size-full"):
+            src = img.get("src", "") or img.get("data-src", "")
+            if src and src.startswith("http") and any(ext in src.lower() for ext in (".jpg", ".png", ".webp", ".jpeg", ".gif")):
+                images.append(src)
+    except Exception as e:
+        error = str(e)
+
+    # Mark as read in DB
+    db = get_db()
+    prev_ch = None
+    next_ch = None
+    try:
+        ch_row = db.execute("SELECT id, komik_id FROM chapters WHERE url=?", (chapter_url,)).fetchone()
+        if ch_row:
+            db.execute("INSERT OR IGNORE INTO read_status (chapter_id) VALUES (?)", (ch_row["id"],))
+            db.commit()
+            # Find prev/next chapters (by id order)
+            # Next = newer chapter (higher id)
+            nxt = db.execute(
+                "SELECT url, text FROM chapters WHERE komik_id=? AND id > ? ORDER BY id ASC LIMIT 1",
+                (ch_row["komik_id"], ch_row["id"])
+            ).fetchone()
+            # Prev = older chapter (lower id)
+            prv = db.execute(
+                "SELECT url, text FROM chapters WHERE komik_id=? AND id < ? ORDER BY id DESC LIMIT 1",
+                (ch_row["komik_id"], ch_row["id"])
+            ).fetchone()
+            if nxt:
+                next_ch = {"url": nxt["url"], "text": nxt["text"]}
+            if prv:
+                prev_ch = {"url": prv["url"], "text": prv["text"]}
+    except Exception:
+        pass
+    finally:
+        db.close()
+
+    return tpl.TemplateResponse(request, "reader.html", context={
+        "user": user, "page": "reader", "services": get_all_services(),
+        "chapter_url": chapter_url, "title": title_text,
+        "images": images, "error": error,
+        "prev_ch": prev_ch, "next_ch": next_ch,
+    })
+
+# ── RSS Feed ────────────────────────────────────────────
+@app.get("/feed/{slug}.xml")
+async def rss_feed(request: Request, slug: str):
+    latest = get_latest(slug)
+    meta = SERVICES.get(slug)
+    if not latest or not meta:
+        return PlainTextResponse("<rss><channel><title>No data</title></channel></rss>", media_type="application/xml")
+    base = str(request.base_url).rstrip("/")
+    items = ""
+    for k in latest.get("data", [])[:50]:
+        chs = "".join(f'<br/><a href="{c["url"]}">{c["text"]}</a>' for c in k.get("chapters", [])[:3])
+        t = k["title"].replace("&","&amp;").replace("<","&lt;")
+        items += f'<item><title>{t}</title><link>{k.get("url","")}</link><description><![CDATA[Type: {k.get("type","?")} | Rating: {k.get("rating","?")}{chs}]]></description><guid>{k.get("url","")}</guid></item>\n'
+    rss = f'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>{meta["name"]}</title><link>{base}/svc/{slug}</link><description>{meta["desc"]}</description><lastBuildDate>{latest.get("scraped_at","")}</lastBuildDate><ttl>30</ttl>{items}</channel></rss>'
+    return Response(content=rss, media_type="application/rss+xml")
+
+# ── Cleanup ─────────────────────────────────────────────
+@app.post("/svc/{slug}/cleanup")
+async def svc_cleanup(request: Request, slug: str):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    cfg = load_svc_config(slug)
+    n = auto_cleanup(slug, cfg.get("cleanup", {}).get("keep_days", 7))
+    return RedirectResponse(f"/svc/{slug}?tab=data&msg=Cleaned+{n}+files.", 302)
+
+# ── Download Chapter Images → Discord (1 image per message) ──
+@app.post("/api/download-chapter")
+async def api_download_chapter(request: Request):
+    """Scrape chapter images and send 1 per message to Discord."""
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+
+    form = await request.form()
+    chapter_url = form.get("url", "")
+    webhook_url = form.get("webhook", "")
+
+    if not chapter_url:
+        return JSONResponse({"error": "url required"}, 400)
+    if not webhook_url:
+        for slug in SERVICES:
+            cfg = load_svc_config(slug)
+            webhook_url = cfg.get("webhook", {}).get("discord_url", "")
+            if webhook_url: break
+    if not webhook_url:
+        return JSONResponse({"error": "No webhook URL configured. Set it in Settings."}, 400)
+
+    import urllib.request
+    from bs4 import BeautifulSoup
+    try:
+        req = urllib.request.Request(chapter_url, headers={"User-Agent": "ServiceManager/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode()
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to fetch: {e}"}, 500)
+
+    soup = BeautifulSoup(html, "html.parser")
+    images = []
+    for img in soup.select("#Baca_Komik img, .chapter_img img, .reading-content img, .main-reading-area img, img.size-full"):
+        src = img.get("src", "") or img.get("data-src", "")
+        if src and src.startswith("http") and any(ext in src.lower() for ext in (".jpg", ".png", ".webp", ".jpeg")):
+            images.append(src)
+
+    if not images:
+        return JSONResponse({"error": "No images found", "url": chapter_url}, 400)
+
+    title = soup.select_one("title")
+    title_text = title.get_text(strip=True) if title else "Chapter"
+
+    # Send header message
+    try:
+        def send_wh(payload):
+            data = json.dumps(payload).encode()
+            r = urllib.request.Request(webhook_url, data=data, headers={
+                "Content-Type": "application/json", "User-Agent": "ServiceManager/1.0",
+            }, method="POST")
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                return resp.status
+
+        send_wh({
+            "content": f"📖 **{title_text}**",
+            "embeds": [{
+                "description": f"📄 **{len(images)}** halaman\n🔗 [Buka di situs asli]({chapter_url})\n👤 Requested by **{user}**",
+                "color": 0x5865F2,
+                "footer": {"text": "Service Manager • Chapter Download"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }]
+        })
+        _time.sleep(0.5)
+
+        # Send 1 image per message (clean, no embed stacking)
+        sent = 0
+        for i, img_url in enumerate(images[:30]):  # max 30 pages
+            try:
+                send_wh({"content": f"Hal. {i+1}/{len(images)}", "embeds": [{"image": {"url": img_url}}]})
+                sent += 1
+                _time.sleep(1)  # Discord rate limit ~1/sec
+            except Exception:
+                _time.sleep(2)
+                try:
+                    send_wh({"content": f"Hal. {i+1}", "embeds": [{"image": {"url": img_url}}]})
+                    sent += 1
+                except Exception:
+                    break
+
+        return JSONResponse({"ok": True, "images": len(images), "sent": sent,
+                             "msg": f"Sent {sent}/{len(images)} pages to Discord!"})
+    except Exception as e:
+        return JSONResponse({"error": f"Webhook failed: {str(e)[:100]}"}, 500)
+
+# ── Bookmarks Page ──────────────────────────────────────
+@app.get("/bookmarks", response_class=HTMLResponse)
+async def bookmarks_page(request: Request):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    db = get_db()
+    try:
+        rows = db.execute("""
+            SELECT k.*, b.created_at as bookmarked_at
+            FROM bookmarks b JOIN komik k ON b.komik_id=k.id
+            ORDER BY b.created_at DESC
+        """).fetchall()
+        bookmarks = []
+        for r in rows:
+            chapters = db.execute(
+                "SELECT text, url, date FROM chapters WHERE komik_id=? ORDER BY id DESC LIMIT 3",
+                (r["id"],)
+            ).fetchall()
+            bookmarks.append({
+                **dict(r),
+                "genres": json.loads(r["genres"]) if r["genres"] else [],
+                "chapters": [dict(c) for c in chapters],
+            })
+    finally:
+        db.close()
+    return tpl.TemplateResponse(request, "bookmarks.html", context={
+        "user": user, "page": "bookmarks", "services": get_all_services(),
+        "bookmarks": bookmarks,
+    })
+
+# ── Search Page (from DB) ──────────────────────────────
+@app.get("/search", response_class=HTMLResponse)
+async def search_page(request: Request):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    q = request.query_params.get("q", "")
+    results = []
+    if q and len(q) >= 2:
+        db = get_db()
+        try:
+            rows = db.execute(
+                "SELECT * FROM komik WHERE title LIKE ? ORDER BY updated_at DESC LIMIT 100",
+                (f"%{q}%",)
+            ).fetchall()
+            for r in rows:
+                chapters = db.execute(
+                    "SELECT text, url, date FROM chapters WHERE komik_id=? ORDER BY id DESC LIMIT 3",
+                    (r["id"],)
+                ).fetchall()
+                results.append({
+                    **dict(r),
+                    "genres": json.loads(r["genres"]) if r["genres"] else [],
+                    "chapters": [dict(c) for c in chapters],
+                })
+        finally:
+            db.close()
+    db2 = get_db()
+    total_komik = db2.execute("SELECT COUNT(*) FROM komik").fetchone()[0]
+    total_ch = db2.execute("SELECT COUNT(*) FROM chapters").fetchone()[0]
+    db2.close()
+    return tpl.TemplateResponse(request, "search.html", context={
+        "user": user, "page": "search", "services": get_all_services(),
+        "q": q, "results": results, "total_komik": total_komik, "total_ch": total_ch,
+    })
+
+# ── Read History Page ───────────────────────────────────
+@app.get("/history", response_class=HTMLResponse)
+async def history_page(request: Request):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    db = get_db()
+    try:
+        rows = db.execute("""
+            SELECT c.text, c.url, c.date, r.read_at, k.title as komik_title, k.image as komik_image, k.source
+            FROM read_status r
+            JOIN chapters c ON r.chapter_id=c.id
+            JOIN komik k ON c.komik_id=k.id
+            ORDER BY r.read_at DESC LIMIT 100
+        """).fetchall()
+        history = [dict(r) for r in rows]
+    finally:
+        db.close()
+    return tpl.TemplateResponse(request, "history.html", context={
+        "user": user, "page": "history", "services": get_all_services(),
+        "history": history,
+    })
+
+
+# ══════════════════════════════════════════════════════════
+# ── SERVER MANAGEMENT ────────────────────────────────────
+# ══════════════════════════════════════════════════════════
+
+def get_server_info() -> dict:
+    """Gather comprehensive server information."""
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    disk = psutil.disk_usage("/")
+    boot = datetime.fromtimestamp(psutil.boot_time(), tz=timezone.utc)
+    uptime_sec = (datetime.now(timezone.utc) - boot).total_seconds()
+
+    # CPU info
+    cpu_freq = psutil.cpu_freq()
+    load1, load5, load15 = os.getloadavg()
+
+    # Network I/O
+    net = psutil.net_io_counters()
+
+    # Top processes by memory
+    procs = []
+    for p in psutil.process_iter(['pid', 'name', 'memory_percent', 'cpu_percent', 'memory_info', 'status']):
+        try:
+            info = p.info
+            if info['memory_percent'] and info['memory_percent'] > 0.5:
+                procs.append({
+                    "pid": info['pid'],
+                    "name": info['name'],
+                    "mem_pct": round(info['memory_percent'], 1),
+                    "mem_mb": round(info['memory_info'].rss / 1024**2, 1) if info['memory_info'] else 0,
+                    "cpu_pct": round(info['cpu_percent'], 1) if info['cpu_percent'] else 0,
+                    "status": info['status'],
+                })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    procs.sort(key=lambda x: x['mem_pct'], reverse=True)
+
+    return {
+        "cpu_count": psutil.cpu_count(),
+        "cpu_freq": round(cpu_freq.current, 0) if cpu_freq else 0,
+        "cpu_pct": psutil.cpu_percent(interval=0.3),
+        "cpu_per_core": psutil.cpu_percent(interval=0.1, percpu=True),
+        "load1": round(load1, 2), "load5": round(load5, 2), "load15": round(load15, 2),
+        "mem_total": round(mem.total / 1024**3, 2),
+        "mem_used": round(mem.used / 1024**3, 2),
+        "mem_available": round(mem.available / 1024**3, 2),
+        "mem_pct": mem.percent,
+        "mem_buffers": round(getattr(mem, 'buffers', 0) / 1024**3, 2),
+        "mem_cached": round(getattr(mem, 'cached', 0) / 1024**3, 2),
+        "swap_total": round(swap.total / 1024**3, 2),
+        "swap_used": round(swap.used / 1024**3, 2),
+        "swap_pct": swap.percent,
+        "disk_total": round(disk.total / 1024**3, 1),
+        "disk_used": round(disk.used / 1024**3, 1),
+        "disk_free": round(disk.free / 1024**3, 1),
+        "disk_pct": round(disk.percent, 1),
+        "net_sent": round(net.bytes_sent / 1024**3, 2),
+        "net_recv": round(net.bytes_recv / 1024**3, 2),
+        "net_packets_sent": net.packets_sent,
+        "net_packets_recv": net.packets_recv,
+        "uptime_sec": int(uptime_sec),
+        "uptime_str": f"{int(uptime_sec//86400)}d {int((uptime_sec%86400)//3600)}h {int((uptime_sec%3600)//60)}m",
+        "boot_time": boot.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "processes": procs[:15],
+        "total_procs": len(list(psutil.process_iter())),
+    }
+
+
+def get_cache_info() -> dict:
+    """Get sizes of cleanable caches."""
+    def dir_size(path):
+        try:
+            result = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                return int(result.stdout.split()[0])
+        except Exception:
+            pass
+        return 0
+
+    def journal_size():
+        try:
+            result = subprocess.run(["journalctl", "--disk-usage"], capture_output=True, text=True, timeout=10)
+            # "Archived and active journals take up 48.0M in the file system."
+            for word in result.stdout.split():
+                if word.replace('.', '').replace(',', '').isdigit():
+                    return float(word)
+            # Try parsing "48.0M"
+            import re
+            m = re.search(r'([\d.]+)([KMGT])', result.stdout)
+            if m:
+                val = float(m.group(1))
+                unit = m.group(2)
+                mult = {'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4}
+                return int(val * mult.get(unit, 1))
+        except Exception:
+            pass
+        return 0
+
+    apt_cache = dir_size("/var/cache/apt/archives")
+    pip_cache = dir_size("/root/.cache/pip")
+    journal = journal_size()
+    tmp_dir = dir_size("/tmp")
+    var_log = dir_size("/var/log")
+    svc_logs = dir_size("/opt/services/logs")
+
+    return {
+        "apt_cache": {"bytes": apt_cache, "human": f"{apt_cache/1024**2:.1f} MB"},
+        "pip_cache": {"bytes": pip_cache, "human": f"{pip_cache/1024**2:.1f} MB"},
+        "journal": {"bytes": journal, "human": f"{journal/1024**2:.1f} MB"},
+        "tmp": {"bytes": tmp_dir, "human": f"{tmp_dir/1024**2:.1f} MB"},
+        "var_log": {"bytes": var_log, "human": f"{var_log/1024**2:.1f} MB"},
+        "svc_logs": {"bytes": svc_logs, "human": f"{svc_logs/1024**2:.1f} MB"},
+        "total": {"bytes": apt_cache + pip_cache + journal + tmp_dir + var_log,
+                  "human": f"{(apt_cache + pip_cache + journal + tmp_dir + var_log)/1024**2:.1f} MB"},
+    }
+
+
+def get_optimization_info() -> dict:
+    """Get current optimization settings."""
+    def sysctl_get(key):
+        try:
+            r = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True, timeout=5)
+            return r.stdout.strip()
+        except Exception:
+            return "?"
+
+    # Swap info
+    swap_file = "/swapfile"
+    swap_exists = os.path.exists(swap_file)
+    swap_size = 0
+    if swap_exists:
+        try:
+            swap_size = os.path.getsize(swap_file) // 1024**2
+        except Exception:
+            pass
+
+    # Systemd services
+    try:
+        r = subprocess.run(
+            ["systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--no-legend"],
+            capture_output=True, text=True, timeout=10
+        )
+        running_services = []
+        for line in r.stdout.strip().splitlines():
+            parts = line.split()
+            if parts:
+                running_services.append(parts[0].replace('.service', ''))
+    except Exception:
+        running_services = []
+
+    # Fail2ban status
+    try:
+        r = subprocess.run(["fail2ban-client", "status"], capture_output=True, text=True, timeout=5)
+        f2b_status = "active" if r.returncode == 0 else "inactive"
+        f2b_jails = []
+        for line in r.stdout.splitlines():
+            if "Jail list" in line:
+                f2b_jails = [j.strip() for j in line.split(":", 1)[1].split(",")]
+    except Exception:
+        f2b_status = "unknown"
+        f2b_jails = []
+
+    return {
+        "swappiness": sysctl_get("vm.swappiness"),
+        "vfs_cache_pressure": sysctl_get("vm.vfs_cache_pressure"),
+        "dirty_ratio": sysctl_get("vm.dirty_ratio"),
+        "dirty_background_ratio": sysctl_get("vm.dirty_background_ratio"),
+        "overcommit_memory": sysctl_get("vm.overcommit_memory"),
+        "tcp_tw_reuse": sysctl_get("net.ipv4.tcp_tw_reuse"),
+        "tcp_fin_timeout": sysctl_get("net.ipv4.tcp_fin_timeout"),
+        "somaxconn": sysctl_get("net.core.somaxconn"),
+        "swap_exists": swap_exists,
+        "swap_size_mb": swap_size,
+        "running_services": running_services,
+        "fail2ban_status": f2b_status,
+        "fail2ban_jails": f2b_jails,
+    }
+
+
+# ── Server Monitor Page ─────────────────────────────────
+@app.get("/server", response_class=HTMLResponse)
+async def server_monitor(request: Request):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    info = get_server_info()
+    return tpl.TemplateResponse(request, "server.html", context={
+        "user": user, "page": "server", "services": get_all_services(),
+        "info": info,
+    })
+
+
+# ── Cache Manager Page ──────────────────────────────────
+@app.get("/server/cache", response_class=HTMLResponse)
+async def cache_page(request: Request, msg: str = Query(None)):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    cache = get_cache_info()
+    return tpl.TemplateResponse(request, "server_cache.html", context={
+        "user": user, "page": "server_cache", "services": get_all_services(),
+        "cache": cache, "msg": msg,
+    })
+
+
+@app.post("/server/cache/clean")
+async def cache_clean(request: Request, target: str = Form(...)):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+
+    results = []
+    targets = target.split(",")
+
+    for t in targets:
+        t = t.strip()
+        try:
+            if t == "apt":
+                subprocess.run(["apt-get", "clean"], capture_output=True, timeout=30)
+                subprocess.run(["apt-get", "autoclean"], capture_output=True, timeout=30)
+                results.append("APT cache cleaned")
+            elif t == "pip":
+                subprocess.run(["rm", "-rf", "/root/.cache/pip"], capture_output=True, timeout=30)
+                results.append("Pip cache cleaned")
+            elif t == "journal":
+                subprocess.run(["journalctl", "--vacuum-size=20M"], capture_output=True, timeout=30)
+                results.append("Journal logs vacuumed to 20MB")
+            elif t == "tmp":
+                # Only clean files older than 1 day, skip /tmp/opencode
+                subprocess.run(
+                    ["find", "/tmp", "-mindepth", "1", "-maxdepth", "1",
+                     "-not", "-name", "opencode", "-mtime", "+1", "-exec", "rm", "-rf", "{}", ";"],
+                    capture_output=True, timeout=30
+                )
+                results.append("Tmp files (>1 day) cleaned")
+            elif t == "logs":
+                # Truncate large log files in /var/log
+                subprocess.run(
+                    ["find", "/var/log", "-name", "*.log", "-size", "+10M", "-exec", "truncate", "-s", "1M", "{}", ";"],
+                    capture_output=True, timeout=30
+                )
+                results.append("Large log files truncated")
+            elif t == "svc_logs":
+                # Truncate service logs > 5MB
+                for f in Path("/opt/services/logs").glob("*.log"):
+                    if f.stat().st_size > 5 * 1024**2:
+                        lines = f.read_text().splitlines()[-500:]
+                        f.write_text("\n".join(lines) + "\n")
+                results.append("Service logs trimmed")
+            elif t == "all":
+                subprocess.run(["apt-get", "clean"], capture_output=True, timeout=30)
+                subprocess.run(["rm", "-rf", "/root/.cache/pip"], capture_output=True, timeout=30)
+                subprocess.run(["journalctl", "--vacuum-size=20M"], capture_output=True, timeout=30)
+                subprocess.run(
+                    ["find", "/tmp", "-mindepth", "1", "-maxdepth", "1",
+                     "-not", "-name", "opencode", "-mtime", "+1", "-exec", "rm", "-rf", "{}", ";"],
+                    capture_output=True, timeout=30
+                )
+                results.append("All caches cleaned")
+        except Exception as e:
+            results.append(f"Error cleaning {t}: {e}")
+
+    msg = " | ".join(results)
+    return RedirectResponse(f"/server/cache?msg={msg}", 302)
+
+
+# ── VPS Optimization Page ───────────────────────────────
+@app.get("/server/optimize", response_class=HTMLResponse)
+async def optimize_page(request: Request, msg: str = Query(None)):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    opt = get_optimization_info()
+    return tpl.TemplateResponse(request, "server_optimize.html", context={
+        "user": user, "page": "server_optimize", "services": get_all_services(),
+        "opt": opt, "msg": msg,
+    })
+
+
+@app.post("/server/optimize/sysctl")
+async def optimize_sysctl(request: Request,
+                          swappiness: str = Form("10"),
+                          vfs_cache_pressure: str = Form("50"),
+                          dirty_ratio: str = Form("15"),
+                          dirty_bg_ratio: str = Form("5")):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+
+    changes = []
+    try:
+        params = {
+            "vm.swappiness": swappiness,
+            "vm.vfs_cache_pressure": vfs_cache_pressure,
+            "vm.dirty_ratio": dirty_ratio,
+            "vm.dirty_background_ratio": dirty_bg_ratio,
+        }
+        for key, val in params.items():
+            subprocess.run(["sysctl", "-w", f"{key}={val}"], capture_output=True, timeout=5)
+            changes.append(f"{key}={val}")
+
+        # Persist to /etc/sysctl.d/99-vps-optimize.conf
+        conf_lines = [f"# VPS Optimization — set via Service Manager\n"]
+        for key, val in params.items():
+            conf_lines.append(f"{key} = {val}\n")
+        Path("/etc/sysctl.d/99-vps-optimize.conf").write_text("".join(conf_lines))
+
+        msg = f"Applied: {', '.join(changes)}"
+    except Exception as e:
+        msg = f"Error: {e}"
+
+    return RedirectResponse(f"/server/optimize?msg={msg}", 302)
+
+
+@app.post("/server/optimize/drop-caches")
+async def drop_caches(request: Request):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    try:
+        # Sync first, then drop page cache
+        subprocess.run(["sync"], capture_output=True, timeout=10)
+        Path("/proc/sys/vm/drop_caches").write_text("1")
+        msg = "Page cache dropped successfully. RAM freed."
+    except Exception as e:
+        msg = f"Error: {e}"
+    return RedirectResponse(f"/server/optimize?msg={msg}", 302)
+
+
+@app.post("/server/optimize/swap-resize")
+async def swap_resize(request: Request, size_mb: str = Form("1024")):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    try:
+        size = int(size_mb)
+        if size < 256 or size > 4096:
+            msg = "Swap size must be between 256MB and 4096MB"
+        else:
+            subprocess.run(["swapoff", "/swapfile"], capture_output=True, timeout=30)
+            subprocess.run(["fallocate", "-l", f"{size}M", "/swapfile"], capture_output=True, timeout=60)
+            subprocess.run(["chmod", "600", "/swapfile"], capture_output=True, timeout=5)
+            subprocess.run(["mkswap", "/swapfile"], capture_output=True, timeout=10)
+            subprocess.run(["swapon", "/swapfile"], capture_output=True, timeout=10)
+            msg = f"Swap resized to {size}MB successfully"
+    except Exception as e:
+        msg = f"Error: {e}"
+    return RedirectResponse(f"/server/optimize?msg={msg}", 302)
+
+
+# ── Server Stats API (for realtime refresh) ─────────────
+@app.get("/api/server/stats")
+async def api_server_stats(request: Request):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    disk = psutil.disk_usage("/")
+    load1, load5, load15 = os.getloadavg()
+    net = psutil.net_io_counters()
+    return JSONResponse({
+        "cpu_pct": psutil.cpu_percent(interval=0.3),
+        "cpu_per_core": psutil.cpu_percent(interval=0.1, percpu=True),
+        "mem_pct": mem.percent,
+        "mem_used_gb": round(mem.used / 1024**3, 2),
+        "mem_available_gb": round(mem.available / 1024**3, 2),
+        "swap_pct": swap.percent,
+        "swap_used_gb": round(swap.used / 1024**3, 2),
+        "disk_pct": round(disk.percent, 1),
+        "disk_used_gb": round(disk.used / 1024**3, 1),
+        "load1": round(load1, 2), "load5": round(load5, 2), "load15": round(load15, 2),
+        "net_sent_gb": round(net.bytes_sent / 1024**3, 2),
+        "net_recv_gb": round(net.bytes_recv / 1024**3, 2),
+    })
+
+
+@app.get("/api/server/processes")
+async def api_server_processes(request: Request):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    procs = []
+    for p in psutil.process_iter(['pid', 'name', 'memory_percent', 'cpu_percent', 'memory_info', 'status']):
+        try:
+            info = p.info
+            if info['memory_percent'] and info['memory_percent'] > 0.3:
+                procs.append({
+                    "pid": info['pid'],
+                    "name": info['name'],
+                    "mem_pct": round(info['memory_percent'], 1),
+                    "mem_mb": round(info['memory_info'].rss / 1024**2, 1) if info['memory_info'] else 0,
+                    "cpu_pct": round(info['cpu_percent'], 1) if info['cpu_percent'] else 0,
+                    "status": info['status'],
+                })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    procs.sort(key=lambda x: x['mem_pct'], reverse=True)
+    return JSONResponse(procs[:20])
