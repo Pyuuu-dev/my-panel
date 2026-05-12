@@ -409,6 +409,73 @@ class="w-full px-3 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus
 <!-- ═══ SETTINGS ═══ -->
 <div class="tab-panel {% if active_tab=='config' %}active{% endif %}" data-tab-group="m" data-tab="config">
 <form method="POST" action="/svc/{{ slug }}/config" class="space-y-4">
+
+{% if slug == 'komiku-scraper' %}
+<!-- Komiku-specific settings -->
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-3" style="color:var(--text)">Update Tracker</h4>
+<div class="grid grid-cols-2 gap-3 mb-3">
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Interval (menit)</label>
+<input type="number" name="interval_minutes" value="{{ cfg.scraper.interval_minutes|default(30) }}" min="5" max="1440" class="w-full px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)"></div>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Halaman per tipe</label>
+<input type="number" name="update_pages" value="{{ cfg.scraper.update_pages|default(3) }}" min="1" max="10" class="w-full px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)"></div>
+</div>
+<div>
+<label class="block text-[10px] mb-2" style="color:var(--text3)">Tipe yang dicek</label>
+<div class="flex flex-wrap gap-3">
+{% set utypes = cfg.scraper.update_types|default(["", "manhwa", "manhua", "manga"]) %}
+<label class="flex items-center gap-2 cursor-pointer">
+  <input type="checkbox" name="type_default" {% if "" in utypes %}checked{% endif %} class="w-3.5 h-3.5 rounded" style="accent-color:#6366f1">
+  <span class="text-xs" style="color:var(--text2)">Default (mixed)</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+  <input type="checkbox" name="type_manhwa" {% if "manhwa" in utypes %}checked{% endif %} class="w-3.5 h-3.5 rounded" style="accent-color:#6366f1">
+  <span class="text-xs" style="color:var(--text2)">Manhwa</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+  <input type="checkbox" name="type_manhua" {% if "manhua" in utypes %}checked{% endif %} class="w-3.5 h-3.5 rounded" style="accent-color:#6366f1">
+  <span class="text-xs" style="color:var(--text2)">Manhua</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+  <input type="checkbox" name="type_manga" {% if "manga" in utypes %}checked{% endif %} class="w-3.5 h-3.5 rounded" style="accent-color:#6366f1">
+  <span class="text-xs" style="color:var(--text2)">Manga</span>
+</label>
+</div>
+<p class="text-[10px] mt-2" style="color:var(--text3)">Setiap tipe dicek secara terpisah. Komik yang sama tidak akan diproses dua kali.</p>
+</div>
+</div>
+
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-3" style="color:var(--text)">Full Scan</h4>
+<div class="grid grid-cols-2 gap-3">
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Delay antar request (detik)</label>
+<input type="number" name="full_scan_delay" value="{{ cfg.scraper.full_scan_delay|default(0.5) }}" min="0.1" max="5" step="0.1" class="w-full px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)"></div>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Batch size (komit per N komik)</label>
+<input type="number" name="full_scan_batch_size" value="{{ cfg.scraper.full_scan_batch_size|default(50) }}" min="10" max="200" class="w-full px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)"></div>
+</div>
+</div>
+
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+<h4 class="text-sm font-medium mb-3" style="color:var(--text)">Discord Webhook</h4>
+<div class="space-y-3">
+<label class="flex items-center gap-3 cursor-pointer">
+  <input type="checkbox" name="webhook_enabled" {% if cfg.webhook is defined and cfg.webhook.enabled %}checked{% endif %} class="w-4 h-4 rounded" style="accent-color:#6366f1">
+  <span class="text-sm" style="color:var(--text)">Enable notifikasi Discord</span>
+</label>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Webhook URL</label>
+<input type="text" name="discord_url" value="{{ cfg.webhook.discord_url|default('') if cfg.webhook is defined else '' }}" placeholder="https://discord.com/api/webhooks/..." class="w-full px-2 py-1.5 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)"></div>
+<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Notify Mode</label>
+<select name="notify_mode" class="px-2 py-1.5 rounded-lg text-xs focus:outline-none" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)">
+  <option value="all" {% if (cfg.webhook is defined and cfg.webhook.notify_mode|default('all')) == 'all' %}selected{% endif %}>Semua update</option>
+  <option value="bookmark" {% if (cfg.webhook is defined and cfg.webhook.notify_mode|default('all')) == 'bookmark' %}selected{% endif %}>Bookmark saja</option>
+</select>
+<p class="text-[10px] mt-1" style="color:var(--text3)">Semua update = notifikasi setiap chapter baru. Bookmark saja = hanya komik yang di-bookmark.</p>
+</div>
+</div>
+</div>
+
+{% else %}
+<!-- Default settings for other scrapers -->
 <div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
 <h4 class="text-sm font-medium mb-3">Scraper</h4>
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -437,18 +504,9 @@ class="w-full px-3 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus
 <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" name="notify_watchlist" {% if cfg.webhook is defined and cfg.webhook.notify_on_watchlist|default(true) %}checked{% endif %} class="w-3.5 h-3.5 rounded border-gray-600 text-indigo-600"><span class="text-[10px]" style="color:var(--text2)">Alert watchlist</span></label>
 <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" name="notify_summary" {% if cfg.webhook is defined and cfg.webhook.notify_on_scrape_done %}checked{% endif %} class="w-3.5 h-3.5 rounded border-gray-600 text-indigo-600"><span class="text-[10px]" style="color:var(--text2)">Summary</span></label>
 </div>
-{% if slug == 'komiku-scraper' %}
-<div><label class="block text-[10px] mb-1" style="color:var(--text3)">Notify Mode</label>
-<select name="notify_mode" class="px-2 py-1.5 rounded-lg text-xs focus:outline-none" style="background:var(--bg3);border:1px solid var(--border);color:var(--text)">
-  <option value="bookmark" {% if (cfg.webhook is defined and cfg.webhook.notify_mode|default('bookmark')) == 'bookmark' %}selected{% endif %}>Bookmark saja</option>
-  <option value="all" {% if (cfg.webhook is defined and cfg.webhook.notify_mode|default('bookmark')) == 'all' %}selected{% endif %}>Semua update</option>
-</select>
-<p class="text-[10px] mt-1" style="color:var(--text3)">Bookmark saja = hanya komik yang di-bookmark. Semua update = notifikasi untuk setiap chapter baru.</p>
-</div>
-{% endif %}
 </div></div></div>
 
-<!-- Cleanup -->
+<!-- Cleanup (non-komiku only) -->
 <div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
 <h4 class="text-sm font-medium mb-2">Auto-Cleanup</h4>
 <div class="flex items-center gap-2">
@@ -456,6 +514,8 @@ class="w-full px-3 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus
 <input type="number" name="keep_days" value="{{ cfg.cleanup.keep_days|default(7) if cfg.cleanup is defined else 7 }}" min="1" max="90" class="w-16 px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" style="background:var(--bg3);border:1px solid var(--border)">
 <span class="text-[10px]" style="color:var(--text3)">hari</span>
 </div></div>
+{% endif %}
+
 <div class="flex items-center justify-end"><button type="submit" class="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg font-medium">Save Settings</button></div>
 </form>
 <!-- Test buttons -->
