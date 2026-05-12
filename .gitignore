@@ -37,3 +37,11 @@ Thumbs.db
 # Temp
 /tmp/
 *.tmp
+
+# Scraper state files
+*/output/.state.json
+*/output/.detail_cache.json
+
+# DB WAL files
+*.db-shm
+*.db-wal

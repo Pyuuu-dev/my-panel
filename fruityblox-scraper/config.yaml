@@ -1,0 +1,47 @@
+# FruityBlox Stock Monitor Configuration
+
+# API Endpoints
+stock_api: "https://raw.githubusercontent.com/iamishan877-max/Blox-Fruits-Stock/main/data/stock.json"
+fruits_api: "https://blox-fruits-api.onrender.com/api/bloxfruits"
+
+# Polling interval (minutes)
+# 30 menit = cukup cepat mendeteksi rotasi baru, sangat ringan (~1KB per request)
+# Hanya save & notify kalau data berubah
+check_interval_minutes: 30
+
+# Scraping Settings (for service_detail template compatibility)
+scraper:
+  interval_minutes: 30
+  max_pages: 1
+  delay: 0
+  detail_limit: 0
+
+request_timeout: 10  # seconds
+
+# Webhook (for compatibility with service_detail template)
+webhook:
+  enabled: false
+  discord_url: ""
+  notify_on_watchlist: false
+  notify_on_scrape_done: false
+
+# Telegram (for compatibility)
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""
+
+# Cleanup (for compatibility)
+cleanup:
+  keep_days: 30
+
+# Watchlist (for compatibility)
+watchlist: []
+
+# Logging
+log_level: "INFO"
+log_file: "logs/output.log"
+error_log_file: "logs/error.log"
+
+# Database
+db_path: "/opt/services/shared/app.db"

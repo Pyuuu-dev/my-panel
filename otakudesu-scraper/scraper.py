@@ -453,6 +453,9 @@ async def main():
 
     logger.info(f"Starting scrape ({base_url}, {max_pages} pages, {len(watchlist)} watchlist)")
 
+    # Track total scrape time from start
+    scrape_start_time = datetime.now()
+
     # Phase 1: Fetch ongoing anime list
     all_results = []
     seen_urls = set()
@@ -534,7 +537,6 @@ async def main():
     save_json(STATE_FILE, new_state)
 
     # Phase 4: Save to SQLite
-    scrape_start = datetime.now().isoformat()
     db = get_db()
     try:
         for anime in all_results:
@@ -561,8 +563,8 @@ async def main():
             if anime["episodes"]:
                 upsert_anime_episodes(db, anime_id, anime["episodes"])
 
-        duration = (datetime.now() - datetime.fromisoformat(scrape_start)).total_seconds()
-        log_scrape_run(db, "otakudesu", len(all_results), len(new_updates), len(watchlist_hits), duration, scrape_start)
+        total_duration = (datetime.now() - scrape_start_time).total_seconds()
+        log_scrape_run(db, "otakudesu", len(all_results), len(new_updates), len(watchlist_hits), total_duration, scrape_start_time.isoformat())
         db.commit()
         logger.info(f"DB: saved {len(all_results)} anime")
     except Exception as e:

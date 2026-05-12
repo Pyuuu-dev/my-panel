@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}FruityBlox Stock History{% endblock %}
+{% block content %}
+<div class="max-w-5xl">
+
+<div class="mb-6">
+  <h2 class="text-xl font-bold">📊 Stock History</h2>
+  <p class="text-xs mt-1" style="color:var(--text3)">Rotation history and fruit frequency (last 7 days).</p>
+</div>
+
+<!-- Fruit Frequency Chart -->
+{% if fruit_freq %}
+<div class="rounded-xl p-4 mb-4" style="background:var(--bg2);border:1px solid var(--border)">
+  <h3 class="text-sm font-semibold mb-3" style="color:var(--text)">🔥 Most Frequent Fruits</h3>
+  <canvas id="fruitFreqChart" height="80"></canvas>
+</div>
+{% endif %}
+
+<!-- Rotation Timeline -->
+<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+  <h3 class="text-sm font-semibold mb-4" style="color:var(--text)">🔄 Rotation Timeline</h3>
+
+  {% if rotations %}
+  <div class="space-y-3">
+    {% for rotation in rotations %}
+    <div class="rounded-lg p-3" style="background:var(--bg3);border:1px solid var(--border)">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-2">
+          <span>{{ '🍎' if rotation.stock_type == 'normal' else '✨' }}</span>
+          <div>
+            <div class="text-sm font-medium" style="color:var(--text)">{{ rotation.stock_type|title }} Stock</div>
+            <div class="text-[11px]" style="color:var(--text3)">{{ rotation.started_at[:19].replace('T', ' ') }}</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] px-2 py-0.5 rounded-full {% if rotation.stock_type == 'normal' %}bg-blue-500/20 text-blue-400{% else %}bg-purple-500/20 text-purple-400{% endif %}">
+            {{ rotation.fruit_count }} fruits
+          </span>
+          {% if rotation.notified %}
+          <span class="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">✓ Notified</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-1">
+        {% for fruit in rotation.fruits %}
+        <span class="text-[10px] px-2 py-0.5 rounded" style="background:var(--bg2);color:var(--text2)">{{ fruit }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center py-8" style="color:var(--text3)">
+    <div class="text-3xl mb-2">📭</div>
+    <div class="text-sm">No rotation history yet.</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="mt-4">
+  <a href="/fruityblox" class="px-4 py-2 rounded-lg text-sm font-medium" style="background:var(--bg2);border:1px solid var(--border);color:var(--text2)">← Back</a>
+</div>
+
+</div>
+
+{% if fruit_freq %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+new Chart(document.getElementById('fruitFreqChart'), {
+  type: 'bar',
+  data: {
+    labels: {{ fruit_freq|map(attribute='fruit_name')|list|tojson }},
+    datasets: [{
+      label: 'Appearances',
+      data: {{ fruit_freq|map(attribute='count')|list|tojson }},
+      backgroundColor: 'rgba(99,102,241,0.5)',
+      borderColor: 'rgba(99,102,241,1)',
+      borderWidth: 1
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true, ticks: { stepSize: 1, color: '#9ca3af' }, grid: { color: '#374151' } }, x: { ticks: { color: '#9ca3af' }, grid: { color: '#374151' } } }
+  }
+});
+</script>
+{% endif %}
+{% endblock %}
