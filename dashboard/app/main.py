@@ -366,30 +366,43 @@ async def svc_config_save(request: Request, slug: str):
     if not user: return RedirectResponse("/login", 302)
     form = await request.form()
     cfg = load_svc_config(slug)
-    if "interval_minutes" in form:
-        cfg.setdefault("scraper", {})
-        cfg["scraper"]["interval_minutes"] = int(form.get("interval_minutes", 30))
-        cfg["scraper"]["max_pages"] = int(form.get("max_pages", 2))
-        cfg["scraper"]["delay"] = int(form.get("delay", 3))
-        cfg["scraper"]["detail_limit"] = int(form.get("detail_limit", 20))
-    wl_raw = form.get("watchlist", "")
-    cfg["watchlist"] = [w.strip() for w in wl_raw.split("\n") if w.strip()]
+
+    cfg.setdefault("scraper", {})
     cfg.setdefault("webhook", {})
-    cfg["webhook"]["enabled"] = "webhook_enabled" in form
-    cfg["webhook"]["discord_url"] = form.get("discord_url", "").strip()
-    cfg["webhook"]["notify_on_watchlist"] = "notify_watchlist" in form
-    cfg["webhook"]["notify_on_scrape_done"] = "notify_summary" in form
-    # Komiku notify_mode
+
     if slug == "komiku-scraper":
-        cfg["webhook"]["notify_mode"] = form.get("notify_mode", "bookmark")
-    # Telegram
-    cfg.setdefault("telegram", {})
-    cfg["telegram"]["enabled"] = "tg_enabled" in form
-    cfg["telegram"]["bot_token"] = form.get("tg_token", "").strip()
-    cfg["telegram"]["chat_id"] = form.get("tg_chat_id", "").strip()
-    # Cleanup
-    cfg.setdefault("cleanup", {})
-    cfg["cleanup"]["keep_days"] = int(form.get("keep_days", 7))
+        # Komiku-specific settings
+        cfg["scraper"]["interval_minutes"] = int(form.get("interval_minutes", 30))
+        cfg["scraper"]["update_pages"] = int(form.get("update_pages", 3))
+        cfg["scraper"]["full_scan_delay"] = float(form.get("full_scan_delay", 0.5))
+        cfg["scraper"]["full_scan_batch_size"] = int(form.get("full_scan_batch_size", 50))
+        # update_types from checkboxes
+        types = []
+        if "type_default" in form: types.append("")
+        if "type_manhwa" in form: types.append("manhwa")
+        if "type_manhua" in form: types.append("manhua")
+        if "type_manga" in form: types.append("manga")
+        if not types: types = ["", "manhwa", "manhua", "manga"]  # fallback
+        cfg["scraper"]["update_types"] = types
+        # webhook
+        cfg["webhook"]["enabled"] = "webhook_enabled" in form
+        cfg["webhook"]["discord_url"] = form.get("discord_url", "").strip()
+        cfg["webhook"]["notify_mode"] = form.get("notify_mode", "all")
+    else:
+        # Default settings for other scrapers
+        if "interval_minutes" in form:
+            cfg["scraper"]["interval_minutes"] = int(form.get("interval_minutes", 30))
+            cfg["scraper"]["max_pages"] = int(form.get("max_pages", 2))
+            cfg["scraper"]["delay"] = int(form.get("delay", 3))
+            cfg["scraper"]["detail_limit"] = int(form.get("detail_limit", 20))
+        wl_raw = form.get("watchlist", "")
+        cfg["watchlist"] = [w.strip() for w in wl_raw.split("\n") if w.strip()]
+        cfg["webhook"]["enabled"] = "webhook_enabled" in form
+        cfg["webhook"]["discord_url"] = form.get("discord_url", "").strip()
+        cfg["webhook"]["notify_on_watchlist"] = "notify_watchlist" in form
+        cfg["webhook"]["notify_on_scrape_done"] = "notify_summary" in form
+        cfg.setdefault("cleanup", {})
+        cfg["cleanup"]["keep_days"] = int(form.get("keep_days", 7))
     save_svc_config(slug, cfg)
     return RedirectResponse(f"/svc/{slug}?tab=config&msg=Config+saved!+Restart+service+to+apply.", 302)
 

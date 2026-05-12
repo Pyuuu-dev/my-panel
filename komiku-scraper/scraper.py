@@ -344,8 +344,8 @@ async def full_scan(cfg: dict):
                 return
             conn.close()
 
-            # page/1/ redirects to /manga/, handle it
-            url = api_base if page == 1 else f"{api_base}{page}/"
+            # page 1 → api_base (e.g. /manga/), page N → /manga/page/N/
+            url = api_base if page == 1 else f"{api_base}page/{page}/"
             html = await fetch(client, url)
             if not html:
                 logger.warning(f"  Page {page}: fetch failed, skipping")
@@ -450,44 +450,61 @@ async def update_tracker(cfg: dict):
         return
 
     api_base = cfg["scraper"]["api_url"]
-    update_pages = cfg["scraper"].get("update_pages", 5)
+    update_pages = cfg["scraper"].get("update_pages", 3)
+    update_types = cfg["scraper"].get("update_types", ["", "manhwa", "manhua", "manga"])
     delay = cfg["scraper"].get("update_delay", 1.0)
     headers = {"User-Agent": cfg["scraper"]["user_agent"]}
 
-    logger.info(f"🔄 Update tracker: checking {update_pages} pages...")
+    total_types = len(update_types)
+    logger.info(f"🔄 Update tracker: {update_pages} pages × {total_types} types...")
 
     scrape_start = datetime.now().isoformat()
     total_checked = 0
     new_updates = 0
     watchlist_hits = 0
+    seen_urls: set = set()  # dedup across types
 
     async with httpx.AsyncClient(headers=headers) as client:
         conn = db_module.get_db()
         try:
-            # Get bookmarks for watchlist check
             bookmarked = set(db_module.get_bookmarked_komik_titles(conn))
             config_watchlist = set(w.lower() for w in cfg.get("watchlist", []))
             all_watchlist = bookmarked | config_watchlist
 
-            for page in range(1, update_pages + 1):
-                url = api_base if page == 1 else f"{api_base}{page}/"
-                html = await fetch(client, url)
-                if not html:
-                    continue
+            for tipe in update_types:
+                for page in range(1, update_pages + 1):
+                    # Build URL:
+                    # page 1 default  → api_base (e.g. https://api.komiku.org/manga/)
+                    # page 1 w/ type  → api_base?tipe=manhwa
+                    # page N default  → api_base + page/N/
+                    # page N w/ type  → api_base + page/N/?tipe=manhwa
+                    if page == 1:
+                        url = f"{api_base}?tipe={tipe}" if tipe else api_base
+                    else:
+                        url = f"{api_base}page/{page}/?tipe={tipe}" if tipe else f"{api_base}page/{page}/"
 
-                komik_list = parse_listing_page(html)
-                for item in komik_list:
-                    total_checked += 1
-                    had_update = await process_komik_update(conn, client, item, cfg, delay)
-                    if had_update:
-                        new_updates += 1
-                        if item["title"].lower() in all_watchlist:
-                            watchlist_hits += 1
+                    html = await fetch(client, url)
+                    if not html:
+                        continue
+
+                    komik_list = parse_listing_page(html)
+                    for item in komik_list:
+                        item_url = item.get("url", "")
+                        if item_url in seen_urls:
+                            continue  # already processed this komik
+                        seen_urls.add(item_url)
+
+                        total_checked += 1
+                        had_update = await process_komik_update(conn, client, item, cfg, delay)
+                        if had_update:
+                            new_updates += 1
+                            if item["title"].lower() in all_watchlist:
+                                watchlist_hits += 1
 
             duration = (datetime.now() - datetime.fromisoformat(scrape_start)).total_seconds()
             db_module.log_scrape_run(conn, "komiku", total_checked, new_updates, watchlist_hits, duration, scrape_start)
             conn.commit()
-            logger.info(f"✓ Update tracker done: {total_checked} checked, {new_updates} new, {watchlist_hits} watchlist")
+            logger.info(f"✓ Update tracker done: {total_checked} unique checked, {new_updates} new, {watchlist_hits} watchlist")
 
         except Exception as e:
             logger.error(f"Update tracker error: {e}")
