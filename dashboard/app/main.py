@@ -24,6 +24,7 @@ from jose import jwt, JWTError
 
 # Shared DB
 sys.path.insert(0, "/opt/services/shared")
+import db
 from db import get_db, init_db, log_uptime
 
 # ── Config ──────────────────────────────────────────────
@@ -33,17 +34,9 @@ SERVICES_DIR = Path("/opt/services")
 SUPERVISOR_URL = "http://admin:supervisorSecret123!@127.0.0.1:9001/RPC2"
 
 SERVICES = {
-    "komik-scraper": {
-        "name": "KomikIndo",
-        "desc": "Scrape update komik dari komikindo.ch",
-        "config_path": SERVICES_DIR / "komik-scraper" / "config.yaml",
-        "output_path": SERVICES_DIR / "komik-scraper" / "output",
-        "latest_file": "latest.json",
-        "source": "komikindo",
-    },
     "komiku-scraper": {
         "name": "Komiku",
-        "desc": "Scrape update komik dari komiku.org",
+        "desc": "Scrape komik dari komiku.org",
         "config_path": SERVICES_DIR / "komiku-scraper" / "config.yaml",
         "output_path": SERVICES_DIR / "komiku-scraper" / "output",
         "latest_file": "latest.json",
@@ -56,6 +49,14 @@ SERVICES = {
         "output_path": SERVICES_DIR / "otakudesu-scraper" / "output",
         "latest_file": "latest.json",
         "source": "otakudesu",
+    },
+    "fruityblox-scraper": {
+        "name": "FruityBlox",
+        "desc": "Monitor Blox Fruits stock dari GitHub API",
+        "config_path": SERVICES_DIR / "fruityblox-scraper" / "config.yaml",
+        "output_path": SERVICES_DIR / "fruityblox-scraper" / "logs",
+        "latest_file": None,
+        "source": "fruityblox",
     },
 }
 
@@ -133,6 +134,8 @@ def read_log(name: str, lines: int = 200) -> str:
 def get_latest(slug: str) -> dict | None:
     m = SERVICES.get(slug)
     if not m: return None
+    # FruityBlox doesn't have latest_file (uses database instead)
+    if not m["latest_file"]: return None
     p = m["output_path"] / m["latest_file"]
     if p.exists():
         try: return json.loads(p.read_text())
@@ -277,10 +280,15 @@ async def svc_detail(request: Request, slug: str):
     user = get_user(request)
     if not user: return RedirectResponse("/login", 302)
     if slug not in SERVICES: return RedirectResponse("/", 302)
+    
+    # Redirect FruityBlox to custom route
+    if slug == "fruityblox-scraper":
+        return RedirectResponse("/services/fruityblox", 302)
 
     meta = SERVICES[slug]
     cfg = load_svc_config(slug)
     latest = get_latest(slug)
+    
     log_raw = read_log(slug, 200)
     log_entries = parse_log_entries(log_raw)
     err_content = read_log(f"{slug}-err", 50)
@@ -329,6 +337,18 @@ async def svc_detail(request: Request, slug: str):
     next_scrape = calc_next_scrape(latest, cfg)
     interval_min = cfg.get("scraper", {}).get("interval_minutes", 30)
 
+    # Extra data for komiku-scraper
+    komiku_scan_state = None
+    komiku_recent = []
+    if slug == "komiku-scraper":
+        import db as _db_module
+        _conn = get_db()
+        try:
+            komiku_scan_state = _db_module.get_komiku_scan_state(_conn)
+            komiku_recent = _db_module.get_komiku_recent_updates(_conn, limit=30)
+        finally:
+            _conn.close()
+
     return tpl.TemplateResponse(request, "service_detail.html", context={
         "user": user, "slug": slug, "meta": meta, "status": status, "cfg": cfg,
         "latest": latest, "log_entries": log_entries, "log_raw": log_raw, "err_content": err_content,
@@ -336,6 +356,7 @@ async def svc_detail(request: Request, slug: str):
         "server_time": server_time, "next_scrape": next_scrape, "interval_min": interval_min,
         "bookmarked_ids": bookmarked_ids, "read_chapter_urls": read_chapter_urls,
         "scrape_stats": scrape_stats, "uptime_events": uptime_events,
+        "komiku_scan_state": komiku_scan_state, "komiku_recent": komiku_recent,
     })
 
 # ── Config save ─────────────────────────────────────────
@@ -358,6 +379,9 @@ async def svc_config_save(request: Request, slug: str):
     cfg["webhook"]["discord_url"] = form.get("discord_url", "").strip()
     cfg["webhook"]["notify_on_watchlist"] = "notify_watchlist" in form
     cfg["webhook"]["notify_on_scrape_done"] = "notify_summary" in form
+    # Komiku notify_mode
+    if slug == "komiku-scraper":
+        cfg["webhook"]["notify_mode"] = form.get("notify_mode", "bookmark")
     # Telegram
     cfg.setdefault("telegram", {})
     cfg["telegram"]["enabled"] = "tg_enabled" in form
@@ -373,6 +397,11 @@ async def svc_config_save(request: Request, slug: str):
 async def svc_log_raw(request: Request, slug: str):
     if not get_user(request): return PlainTextResponse("Unauthorized", 401)
     return read_log(slug, 500)
+
+@app.get("/api/komiku/live-log", response_class=PlainTextResponse)
+async def komiku_live_log(request: Request):
+    if not get_user(request): return PlainTextResponse("Unauthorized", 401)
+    return read_log("komiku-scraper", 20)
 
 # ── Test Webhook ────────────────────────────────────────
 @app.post("/svc/{slug}/test-webhook")
@@ -827,34 +856,150 @@ async def search_page(request: Request):
     user = get_user(request)
     if not user: return RedirectResponse("/login", 302)
     q = request.query_params.get("q", "")
+    filter_type = request.query_params.get("type", "")
+    filter_status = request.query_params.get("status", "")
     results = []
-    if q and len(q) >= 2:
-        db = get_db()
-        try:
-            rows = db.execute(
-                "SELECT * FROM komik WHERE title LIKE ? ORDER BY updated_at DESC LIMIT 100",
-                (f"%{q}%",)
-            ).fetchall()
-            for r in rows:
-                chapters = db.execute(
-                    "SELECT text, url, date FROM chapters WHERE komik_id=? ORDER BY id DESC LIMIT 3",
-                    (r["id"],)
-                ).fetchall()
-                results.append({
-                    **dict(r),
-                    "genres": json.loads(r["genres"]) if r["genres"] else [],
-                    "chapters": [dict(c) for c in chapters],
-                })
-        finally:
-            db.close()
-    db2 = get_db()
-    total_komik = db2.execute("SELECT COUNT(*) FROM komik").fetchone()[0]
-    total_ch = db2.execute("SELECT COUNT(*) FROM chapters").fetchone()[0]
-    db2.close()
+    conn = get_db()
+    try:
+        where = ["source='komiku'"]
+        params = []
+        if q and len(q) >= 2:
+            where.append("title LIKE ?")
+            params.append(f"%{q}%")
+        if filter_type:
+            where.append("type=?")
+            params.append(filter_type)
+        if filter_status:
+            where.append("status=?")
+            params.append(filter_status)
+        where_sql = " AND ".join(where)
+        rows = conn.execute(
+            f"SELECT id, title, url, image, type, status, genres, last_chapter, last_chapter_date, total_chapters, updated_at FROM komik WHERE {where_sql} ORDER BY updated_at DESC LIMIT 200",
+            params
+        ).fetchall()
+        for r in rows:
+            results.append({
+                **dict(r),
+                "genres": json.loads(r["genres"]) if r["genres"] else [],
+            })
+        total_komik = conn.execute("SELECT COUNT(*) FROM komik WHERE source='komiku'").fetchone()[0]
+        total_ch = conn.execute("SELECT COUNT(*) FROM chapters c JOIN komik k ON c.komik_id=k.id WHERE k.source='komiku'").fetchone()[0]
+    finally:
+        conn.close()
     return tpl.TemplateResponse(request, "search.html", context={
         "user": user, "page": "search", "services": get_all_services(),
-        "q": q, "results": results, "total_komik": total_komik, "total_ch": total_ch,
+        "q": q, "filter_type": filter_type, "filter_status": filter_status,
+        "results": results, "total_komik": total_komik, "total_ch": total_ch,
     })
+
+
+@app.get("/komik/{komik_id}", response_class=HTMLResponse)
+async def komik_detail_page(request: Request, komik_id: int):
+    user = get_user(request)
+    if not user: return RedirectResponse("/login", 302)
+    conn = get_db()
+    try:
+        r = conn.execute("SELECT * FROM komik WHERE id=?", (komik_id,)).fetchone()
+        if not r:
+            return RedirectResponse("/search", 302)
+        chapters = conn.execute(
+            "SELECT c.id, c.text, c.url, c.date, CASE WHEN rs.id IS NOT NULL THEN 1 ELSE 0 END as is_read FROM chapters c LEFT JOIN read_status rs ON rs.chapter_id=c.id WHERE c.komik_id=? ORDER BY c.id DESC",
+            (komik_id,)
+        ).fetchall()
+        is_bookmarked = conn.execute("SELECT id FROM bookmarks WHERE komik_id=?", (komik_id,)).fetchone() is not None
+        komik = {
+            **dict(r),
+            "genres": json.loads(r["genres"]) if r["genres"] else [],
+            "chapters": [dict(c) for c in chapters],
+            "is_bookmarked": is_bookmarked,
+        }
+    finally:
+        conn.close()
+    return tpl.TemplateResponse(request, "komik_detail.html", context={
+        "user": user, "page": "search", "services": get_all_services(),
+        "komik": komik,
+    })
+
+
+# ── Komiku Full Scan API ─────────────────────────────────────
+
+@app.post("/api/komiku/full-scan/start")
+async def komiku_full_scan_start(request: Request):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    import db as _dbm
+    conn = get_db()
+    try:
+        state = _dbm.get_komiku_scan_state(conn)
+        if state["status"] == "running":
+            return JSONResponse({"error": "Full scan already running"}, 400)
+        body = {}
+        try:
+            if request.headers.get("content-type", "").startswith("application/json"):
+                body = await request.json()
+        except Exception:
+            pass
+        resume = body.get("resume", True) if isinstance(body, dict) else True
+        if not resume:
+            _dbm.update_komiku_scan_state(conn, last_page=0, total_komik=0)
+        _dbm.update_komiku_scan_state(conn, status="running", started_at=datetime.now().isoformat())
+        return JSONResponse({"success": True, "message": "Full scan started", "resume": resume})
+    finally:
+        conn.close()
+
+
+@app.post("/api/komiku/full-scan/stop")
+async def komiku_full_scan_stop(request: Request):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    import db as _dbm
+    conn = get_db()
+    try:
+        _dbm.update_komiku_scan_state(conn, status="stop_requested")
+        return JSONResponse({"success": True, "message": "Stop requested"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/komiku/full-scan/status")
+async def komiku_full_scan_status(request: Request):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    import db as _dbm
+    conn = get_db()
+    try:
+        state = _dbm.get_komiku_scan_state(conn)
+        last_page = state["last_page"] or 0
+        total_pages = state["total_pages"] or 717
+        pct = round(last_page / total_pages * 100, 1) if total_pages > 0 else 0
+        remaining_pages = total_pages - last_page
+        eta_minutes = round(remaining_pages * 10 * 0.8 / 60)
+        return JSONResponse({
+            "status": state["status"],
+            "last_page": last_page,
+            "total_pages": total_pages,
+            "total_komik": state["total_komik"] or 0,
+            "percent": pct,
+            "eta_minutes": eta_minutes,
+            "started_at": state.get("started_at"),
+            "finished_at": state.get("finished_at"),
+        })
+    finally:
+        conn.close()
+
+
+@app.post("/api/komiku/full-scan/reset")
+async def komiku_full_scan_reset(request: Request):
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    import db as _dbm
+    conn = get_db()
+    try:
+        _dbm.update_komiku_scan_state(conn, status="idle", last_page=0, total_komik=0,
+                                      started_at=None, finished_at=None)
+        return JSONResponse({"success": True, "message": "Scan state reset"})
+    finally:
+        conn.close()
 
 # ── Read History Page ───────────────────────────────────
 @app.get("/history", response_class=HTMLResponse)
@@ -887,14 +1032,26 @@ async def history_page(request: Request):
 async def anime_page(request: Request):
     user = get_user(request)
     if not user: return RedirectResponse("/login", 302)
+
+    # Read latest.json for correct ongoing order (same as otakudesu website)
+    latest_path = SERVICES_DIR / "otakudesu-scraper" / "output" / "latest.json"
+    scrape_order = []  # title list in website order
+    if latest_path.exists():
+        try:
+            latest_data = json.loads(latest_path.read_text())
+            scrape_order = [a["title"] for a in latest_data.get("data", [])]
+        except Exception:
+            pass
+
     db = get_db()
     try:
-        rows = db.execute("SELECT * FROM anime ORDER BY updated_at DESC").fetchall()
-        # Get bookmarked anime IDs
+        rows = db.execute("SELECT * FROM anime").fetchall()
         bookmarked_ids = set(
             r["anime_id"] for r in db.execute("SELECT anime_id FROM anime_bookmarks").fetchall()
         )
-        anime_list = []
+
+        # Build lookup by title
+        anime_by_title = {}
         for r in rows:
             a = dict(r)
             a["genres"] = json.loads(a["genres"]) if a["genres"] else []
@@ -903,7 +1060,20 @@ async def anime_page(request: Request):
             a["bookmarked"] = a["id"] in bookmarked_ids
             if not a.get("day"):
                 a["day"] = ""
-            anime_list.append(a)
+            anime_by_title[a["title"]] = a
+
+        # Build ordered list: scrape order first, then any DB-only entries
+        anime_list = []
+        seen = set()
+        for title in scrape_order:
+            if title in anime_by_title:
+                anime_list.append(anime_by_title[title])
+                seen.add(title)
+        # Append remaining (not in latest scrape, e.g. older anime)
+        for title, a in anime_by_title.items():
+            if title not in seen:
+                anime_list.append(a)
+
         total_anime = len(anime_list)
         total_episodes = db.execute("SELECT COUNT(*) FROM anime_episodes").fetchone()[0]
         total_bookmarked = len(bookmarked_ids)
@@ -916,21 +1086,29 @@ async def anime_page(request: Request):
     finally:
         db.close()
 
-    # Calculate next scrape time
+    # Calculate scrape times using started_at (local server time)
     next_scrape = "—"
+    last_scrape_time = "—"
+    scrape_duration = 0
     if scrape_info:
         try:
-            finished = datetime.fromisoformat(scrape_info["finished_at"])
-            next_t = finished + timedelta(minutes=30)
+            started = datetime.fromisoformat(scrape_info["started_at"])
+            scrape_duration = scrape_info["duration_sec"]
+            last_scrape_time = started.strftime("%d %b %Y, %H:%M:%S")
+            next_t = started + timedelta(minutes=30)
             next_scrape = next_t.strftime("%H:%M:%S")
         except Exception:
             pass
+
+    server_time = datetime.now().strftime("%H:%M:%S")
 
     return tpl.TemplateResponse(request, "anime.html", context={
         "user": user, "page": "anime", "services": get_all_services(),
         "anime_list": anime_list, "total_anime": total_anime,
         "total_episodes": total_episodes, "total_bookmarked": total_bookmarked,
         "scrape_info": scrape_info, "next_scrape": next_scrape,
+        "last_scrape_time": last_scrape_time, "scrape_duration": scrape_duration,
+        "server_time": server_time,
     })
 
 
@@ -1679,3 +1857,352 @@ async def api_server_processes(request: Request):
             pass
     procs.sort(key=lambda x: x['mem_pct'], reverse=True)
     return JSONResponse(procs[:20])
+
+
+# ══════════════════════════════════════════════════════════════
+# FruityBlox Stock Monitor Routes
+# ══════════════════════════════════════════════════════════════
+
+def _build_fruityblox_embed(stock_type: str, fruits: list, updated_at: str = None) -> dict:
+    """Build Discord embed for FruityBlox stock. Standalone, no external deps."""
+    from datetime import datetime, timedelta
+
+    color = 0x3498db if stock_type == 'normal' else 0x9b59b6
+
+    rarity_order = ['mythical', 'legendary', 'rare', 'uncommon', 'common', 'unknown']
+    rarity_emojis = {
+        'mythical': '🔥', 'legendary': '⭐', 'rare': '💎',
+        'uncommon': '🌟', 'common': '⚪', 'unknown': '❓'
+    }
+
+    grouped = {}
+    for f in fruits:
+        r = f.get('rarity', 'unknown')
+        grouped.setdefault(r, []).append(f)
+
+    fields = []
+    for rarity in rarity_order:
+        if rarity not in grouped:
+            continue
+        lines = []
+        for f in sorted(grouped[rarity], key=lambda x: x.get('price_beli', 0), reverse=True):
+            name = f.get('fruit_name', '?')
+            price = f.get('price_beli', 0)
+            robux = f.get('price_robux', 0)
+            robux_str = f" | 💎 {robux:,} Robux" if robux else ""
+            lines.append(f"• **{name}** — 💰 {price:,} Beli{robux_str}")
+        fields.append({
+            'name': f"{rarity_emojis[rarity]} {rarity.title()}",
+            'value': '\n'.join(lines),
+            'inline': False
+        })
+
+    # Calculate next rotation from updated_at
+    now = datetime.now()
+    if updated_at:
+        try:
+            dt = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+            dt_local = dt.astimezone().replace(tzinfo=None)
+            next_update = dt_local + timedelta(hours=4)
+            diff = next_update - now
+            if diff.total_seconds() > 0:
+                h = int(diff.total_seconds() // 3600)
+                m = int((diff.total_seconds() % 3600) // 60)
+                next_str = f"{h}j {m}m lagi" if h > 0 else f"{m}m lagi"
+            else:
+                next_str = "Segera"
+            updated_str = dt_local.strftime('%d %b %Y, %H:%M WIB')
+        except Exception:
+            updated_str = now.strftime('%d %b %Y, %H:%M WIB')
+            next_str = "~4 jam"
+    else:
+        updated_str = now.strftime('%d %b %Y, %H:%M WIB')
+        next_str = "~4 jam"
+
+    icon = '🍎' if stock_type == 'normal' else '✨'
+    return {
+        'title': f"{icon} Blox Fruits Stock — {stock_type.title()}",
+        'description': f"⏰ **Update:** {updated_str}\n⏭️ **Next rotation:** {next_str}",
+        'color': color,
+        'fields': fields,
+        'footer': {'text': f"📊 {len(fruits)} fruits • FruityBlox Monitor"},
+        'timestamp': datetime.utcnow().isoformat()
+    }
+
+
+@app.get("/fruityblox")
+async def fruityblox_monitor(request: Request):
+    """FruityBlox stock monitor page."""
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+    
+    conn = db.get_db()
+    
+    # Get latest stock
+    normal_stock = db.get_latest_fruityblox_stock(conn, 'normal')
+    mirage_stock = db.get_latest_fruityblox_stock(conn, 'mirage')
+    
+    conn.close()
+    
+    # Get updated_at from API for accurate rotation time
+    import requests
+    updated_at_str = ""
+    next_rotation_str = ""
+    next_rotation_iso = ""
+    try:
+        r = requests.get(
+            "https://raw.githubusercontent.com/iamishan877-max/Blox-Fruits-Stock/main/data/stock.json",
+            timeout=5, headers={'User-Agent': 'FruityBlox-Monitor/1.0'}
+        )
+        api_data = r.json()
+        raw_updated = api_data.get('updated_at', '')
+        if raw_updated:
+            from datetime import timezone
+            dt = datetime.fromisoformat(raw_updated.replace('Z', '+00:00'))
+            dt_local = dt.astimezone(timezone(timedelta(hours=7))).replace(tzinfo=None)
+            updated_at_str = dt_local.strftime('%d %b %Y, %H:%M WIB')
+            next_rot = dt_local + timedelta(hours=4)
+            next_rotation_iso = next_rot.isoformat()
+            diff = next_rot - datetime.now()
+            if diff.total_seconds() > 0:
+                h = int(diff.total_seconds() // 3600)
+                m = int((diff.total_seconds() % 3600) // 60)
+                next_rotation_str = f"{h}j {m}m lagi"
+            else:
+                next_rotation_str = "Segera / Menunggu update"
+    except Exception:
+        updated_at_str = "N/A"
+        next_rotation_str = "N/A"
+    
+    return tpl.TemplateResponse(request, "fruityblox.html", context={
+        "user": user,
+        "services": get_all_services(),
+        "normal_stock": normal_stock,
+        "mirage_stock": mirage_stock,
+        "updated_at_str": updated_at_str,
+        "next_rotation_str": next_rotation_str,
+        "next_rotation_iso": next_rotation_iso,
+        "page": "fruityblox"
+    })
+
+
+@app.get("/fruityblox/history")
+async def fruityblox_history(request: Request):
+    """FruityBlox stock history page."""
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+    
+    conn = db.get_db()
+    
+    # Get rotation history
+    rotations = db.get_fruityblox_rotation_history(conn, days=7)
+    
+    # Get fruit frequency stats
+    fruit_freq = conn.execute("""
+        SELECT fruit_name, COUNT(*) as count
+        FROM fruityblox_stock
+        WHERE scraped_at >= datetime('now', '-7 days')
+        GROUP BY fruit_name
+        ORDER BY count DESC
+        LIMIT 20
+    """).fetchall()
+    
+    conn.close()
+    
+    return tpl.TemplateResponse(request, "fruityblox_history.html", context={
+        "user": user,
+        "services": get_all_services(),
+        "rotations": rotations,
+        "fruit_freq": [dict(row) for row in fruit_freq],
+        "page": "fruityblox_history"
+    })
+
+
+@app.get("/fruityblox/config")
+async def fruityblox_config(request: Request):
+    """FruityBlox configuration page."""
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+    
+    conn = db.get_db()
+    config = db.get_all_fruityblox_config(conn)
+    conn.close()
+    
+    msg = request.query_params.get("msg", "")
+    
+    return tpl.TemplateResponse(request, "fruityblox_config.html", context={
+        "user": user,
+        "services": get_all_services(),
+        "config": config,
+        "msg": msg,
+        "page": "fruityblox_config"
+    })
+
+
+@app.post("/fruityblox/config")
+async def update_fruityblox_config(request: Request):
+    """Update FruityBlox configuration."""
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+    
+    form = await request.form()
+    conn = db.get_db()
+    
+    try:
+        # Update config values
+        db.set_fruityblox_config(conn, 'discord_webhook_url', form.get('discord_webhook_url', ''))
+        db.set_fruityblox_config(conn, 'discord_channel_id', form.get('discord_channel_id', ''))
+        db.set_fruityblox_config(conn, 'discord_mentions', form.get('discord_mentions', ''))
+        db.set_fruityblox_config(conn, 'notify_normal', '1' if form.get('notify_normal') else '0')
+        db.set_fruityblox_config(conn, 'notify_mirage', '1' if form.get('notify_mirage') else '0')
+        
+        msg = "Configuration saved successfully!"
+    except Exception as e:
+        msg = f"Error: {e}"
+    finally:
+        conn.close()
+    
+    return RedirectResponse(f"/fruityblox/config?msg={msg}", 302)
+
+
+@app.post("/api/fruityblox/test-notification")
+async def test_fruityblox_notification(request: Request):
+    """Test Discord notification with real current stock data."""
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+
+    conn = db.get_db()
+    try:
+        webhook_url = db.get_fruityblox_config(conn, 'discord_webhook_url')
+        if not webhook_url:
+            return JSONResponse({"error": "Webhook URL belum dikonfigurasi"}, 400)
+
+        normal_stock = db.get_latest_fruityblox_stock(conn, 'normal')
+        mirage_stock = db.get_latest_fruityblox_stock(conn, 'mirage')
+
+        # Get updated_at from GitHub API
+        import requests
+        updated_at = None
+        try:
+            r = requests.get(
+                "https://raw.githubusercontent.com/iamishan877-max/Blox-Fruits-Stock/main/data/stock.json",
+                timeout=8, headers={'User-Agent': 'FruityBlox-Monitor/1.0'}
+            )
+            updated_at = r.json().get('updated_at')
+        except Exception:
+            pass
+
+        mentions = db.get_fruityblox_config(conn, 'discord_mentions')
+        content = ""
+        if mentions:
+            role_ids = [rid.strip() for rid in mentions.split(',') if rid.strip()]
+            content = ' '.join([f"<@&{rid}>" for rid in role_ids])
+
+        embeds = []
+        if normal_stock:
+            embeds.append(_build_fruityblox_embed('normal', normal_stock, updated_at))
+        if mirage_stock:
+            embeds.append(_build_fruityblox_embed('mirage', mirage_stock, updated_at))
+
+        sent = 0
+        for embed in embeds:
+            payload = {'content': content if sent == 0 else '', 'embeds': [embed]}
+            requests.post(
+                webhook_url, json=payload,
+                headers={'User-Agent': 'FruityBlox-Monitor/1.0'},
+                timeout=10
+            ).raise_for_status()
+            sent += 1
+
+        return JSONResponse({"success": True, "message": f"Berhasil kirim {sent} embed ke Discord!"})
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, 500)
+    finally:
+        conn.close()
+
+
+@app.get("/api/fruityblox/current-stock")
+async def api_fruityblox_current_stock(request: Request):
+    """API endpoint for current stock (JSON)."""
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    
+    conn = db.get_db()
+    
+    normal_stock = db.get_latest_fruityblox_stock(conn, 'normal')
+    mirage_stock = db.get_latest_fruityblox_stock(conn, 'mirage')
+    
+    last_scrape = conn.execute("""
+        SELECT finished_at FROM fruityblox_scrape_runs
+        ORDER BY finished_at DESC LIMIT 1
+    """).fetchone()
+    
+    conn.close()
+    
+    return JSONResponse({
+        "normal": normal_stock,
+        "mirage": mirage_stock,
+        "updated_at": last_scrape['finished_at'] if last_scrape else None
+    })
+
+
+@app.get("/services/fruityblox")
+async def service_fruityblox(request: Request):
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+
+    active_tab = request.query_params.get("tab", "overview")
+    conn = db.get_db()
+
+    try:
+        p = sup().supervisor.getProcessInfo("fruityblox-scraper")
+        status = {"state": p["statename"], "pid": p["pid"], "uptime": p["description"] if p["statename"] == "RUNNING" else ""}
+    except Exception:
+        status = {"state": "UNKNOWN", "pid": 0, "uptime": ""}
+
+    normal_stock = db.get_latest_fruityblox_stock(conn, 'normal')
+    mirage_stock = db.get_latest_fruityblox_stock(conn, 'mirage')
+
+    last_scrape = conn.execute(
+        "SELECT * FROM fruityblox_scrape_runs ORDER BY finished_at DESC LIMIT 1"
+    ).fetchone()
+
+    stats = conn.execute("""
+        SELECT DATE(finished_at) as date,
+               COUNT(*) as total_runs,
+               SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as success_runs,
+               SUM(CASE WHEN new_rotation=1 THEN 1 ELSE 0 END) as new_rotations
+        FROM fruityblox_scrape_runs
+        WHERE finished_at >= datetime('now','-7 days')
+        GROUP BY DATE(finished_at)
+        ORDER BY date DESC
+    """).fetchall()
+
+    conn.close()
+
+    logs = []
+    log_file = "/opt/services/fruityblox-scraper/logs/output.log"
+    if os.path.exists(log_file):
+        with open(log_file, 'r') as f:
+            logs = f.readlines()[-100:]
+
+    return tpl.TemplateResponse(request, "fruityblox_service.html", context={
+        "user": user,
+        "page": "svc_fruityblox-scraper",
+        "services": get_all_services(),
+        "active_tab": active_tab,
+        "status": status,
+        "normal_stock": normal_stock,
+        "mirage_stock": mirage_stock,
+        "last_scrape": dict(last_scrape) if last_scrape else None,
+        "stats": [dict(r) for r in stats],
+        "logs": logs,
+    })

@@ -63,7 +63,7 @@ body{background:var(--bg);color:var(--text)}
 <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
 
 <!-- Sidebar -->
-<aside id="sidebar" class="w-56 flex flex-col fixed h-full z-40" style="background:var(--bg2);border-right:1px solid var(--border)">
+<aside id="sidebar" class="w-52 flex flex-col fixed h-full z-40" style="background:var(--bg2);border-right:1px solid var(--border)">
 <div class="p-4 flex items-center justify-between" style="border-bottom:1px solid var(--border)">
 <a href="/" class="flex items-center gap-2" onclick="closeSidebar()">
 <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white text-xs font-bold">SM</div>
@@ -77,13 +77,14 @@ body{background:var(--bg);color:var(--text)}
 <p class="text-[10px] uppercase tracking-wider px-3 mb-1" style="color:var(--text3)">Overview</p>
 <a href="/" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='dashboard' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='dashboard' %}color:var(--text2){% endif %}">
 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z"/></svg>Dashboard</a>
-
 <a href="/bookmarks" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='bookmarks' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='bookmarks' %}color:var(--text2){% endif %}">
 <span class="text-sm">⭐</span>Bookmarks</a>
+
+<p class="text-[10px] uppercase tracking-wider px-3 mt-4 mb-1" style="color:var(--text3)">Komik</p>
 <a href="/search" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='search' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='search' %}color:var(--text2){% endif %}">
-<span class="text-sm">🔍</span>Search DB</a>
+<span class="text-sm">🔍</span>Search Komik</a>
 <a href="/history" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='history' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='history' %}color:var(--text2){% endif %}">
-<span class="text-sm">📖</span>History</a>
+<span class="text-sm">📖</span>Read History</a>
 
 <p class="text-[10px] uppercase tracking-wider px-3 mt-4 mb-1" style="color:var(--text3)">Anime</p>
 <a href="/anime" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {% if page=='anime' %}bg-indigo-600/20 text-indigo-400{% else %}hover:opacity-80{% endif %}" style="{% if page!='anime' %}color:var(--text2){% endif %}">
@@ -97,8 +98,8 @@ body{background:var(--bg);color:var(--text)}
 {% else %}<div class="w-2 h-2 rounded-full" style="background:var(--text3)"></div>{% endif %}
 {{ s.name }}</a>
 {% else %}
-<a href="/svc/komik-scraper" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style="color:var(--text2)">
-<div class="w-2 h-2 rounded-full" style="background:var(--text3)"></div>Komik Scraper</a>
+<a href="/svc/komiku-scraper" onclick="closeSidebar()" class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style="color:var(--text2)">
+<div class="w-2 h-2 rounded-full" style="background:var(--text3)"></div>Komiku</a>
 {% endfor %}
 
 <p class="text-[10px] uppercase tracking-wider px-3 mt-4 mb-1" style="color:var(--text3)">Server</p>
@@ -123,8 +124,8 @@ body{background:var(--bg);color:var(--text)}
 </div>
 </aside>
 
-<main id="main-content" class="flex-1 ml-56 overflow-y-auto">
-<div class="p-4 md:p-6 max-w-5xl pt-14 md:pt-6">{% block content %}{% endblock %}</div>
+<main id="main-content" class="flex-1 ml-52 overflow-y-auto">
+<div class="p-4 md:p-6 pt-14 md:pt-6 max-w-screen-xl">{% block content %}{% endblock %}</div>
 </main>
 </div>
 

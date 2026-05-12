@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}FruityBlox - Service{% endblock %}
+{% block content %}
+<div class="max-w-5xl">
+
+<!-- Header -->
+<div class="flex items-center justify-between mb-4">
+  <div>
+    <h2 class="text-xl font-bold">🍎 FruityBlox Stock Monitor</h2>
+    <p class="text-xs mt-0.5" style="color:var(--text3)">Monitor Blox Fruits stock dari GitHub API</p>
+  </div>
+  <div class="flex items-center gap-2">
+    {% if status.state == "RUNNING" %}
+    <span class="flex items-center gap-1.5 text-xs text-emerald-400"><span class="w-2 h-2 bg-emerald-500 rounded-full"></span>RUNNING</span>
+    {% elif status.state == "STOPPED" %}
+    <span class="flex items-center gap-1.5 text-xs text-gray-400"><span class="w-2 h-2 bg-gray-500 rounded-full"></span>STOPPED</span>
+    {% else %}
+    <span class="flex items-center gap-1.5 text-xs text-red-400"><span class="w-2 h-2 bg-red-500 rounded-full"></span>{{ status.state }}</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Control Buttons -->
+<div class="flex gap-2 mb-6">
+  <form method="POST" action="/svc/fruityblox-scraper/start"><button class="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white">▶ Start</button></form>
+  <form method="POST" action="/svc/fruityblox-scraper/stop"><button class="px-4 py-2 rounded-lg text-sm font-medium bg-red-600 hover:bg-red-700 text-white">⏹ Stop</button></form>
+  <form method="POST" action="/svc/fruityblox-scraper/restart"><button class="px-4 py-2 rounded-lg text-sm font-medium bg-yellow-600 hover:bg-yellow-700 text-white">↺ Restart</button></form>
+  <a href="/fruityblox" class="px-4 py-2 rounded-lg text-sm font-medium" style="background:var(--bg2);color:var(--text2)">🍎 Stock Monitor</a>
+  <a href="/fruityblox/config" class="px-4 py-2 rounded-lg text-sm font-medium" style="background:var(--bg2);color:var(--text2)">⚙️ Config</a>
+</div>
+
+<!-- Tabs -->
+<div class="flex gap-1 mb-4 overflow-x-auto" style="border-bottom:1px solid var(--border)">
+  {% for t_id, t_label in [("overview","Overview"),("logs","Logs"),("stats","Stats")] %}
+  <button class="tab-btn {% if active_tab==t_id %}active{% endif %}" data-tab-btn-group="m" data-tab-btn="{{ t_id }}" onclick="switchTab('m','{{ t_id }}')">{{ t_label }}</button>
+  {% endfor %}
+</div>
+
+<!-- OVERVIEW TAB -->
+<div class="tab-panel {% if active_tab=='overview' %}active{% endif %}" data-tab-group="m" data-tab="overview">
+  <div class="grid grid-cols-3 gap-3 mb-4">
+    <div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)">
+      <div class="text-[10px] mb-1" style="color:var(--text3)">Normal Stock</div>
+      <div class="text-2xl font-bold text-blue-400">{{ normal_stock|length }}</div>
+      <div class="text-[10px]" style="color:var(--text3)">fruits</div>
+    </div>
+    <div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)">
+      <div class="text-[10px] mb-1" style="color:var(--text3)">Mirage Stock</div>
+      <div class="text-2xl font-bold text-purple-400">{{ mirage_stock|length }}</div>
+      <div class="text-[10px]" style="color:var(--text3)">fruits</div>
+    </div>
+    <div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)">
+      <div class="text-[10px] mb-1" style="color:var(--text3)">Last Scrape</div>
+      <div class="text-sm font-bold">{{ last_scrape.finished_at[11:19] if last_scrape else 'N/A' }}</div>
+      <div class="text-[10px]" style="color:var(--text3)">{{ last_scrape.finished_at[:10] if last_scrape else '' }}</div>
+    </div>
+  </div>
+
+  <!-- Normal Stock -->
+  <div class="rounded-xl p-4 mb-4" style="background:var(--bg2);border:1px solid var(--border)">
+    <h4 class="text-sm font-medium mb-3">🍎 Normal Stock</h4>
+    {% if normal_stock %}
+    <div class="space-y-2">
+      {% for fruit in normal_stock %}
+      {% set rarity_color = 'text-red-400' if fruit.rarity == 'mythical' else 'text-yellow-400' if fruit.rarity == 'legendary' else 'text-purple-400' if fruit.rarity == 'rare' else 'text-blue-400' if fruit.rarity == 'uncommon' else 'text-gray-400' %}
+      <div class="flex items-center justify-between py-1.5 px-3 rounded-lg" style="background:var(--bg3)">
+        <div>
+          <span class="text-sm font-medium">{{ fruit.fruit_name }}</span>
+          <span class="text-[10px] ml-2 {{ rarity_color }}">{{ fruit.rarity|title }}</span>
+        </div>
+        <div class="text-right">
+          <span class="text-sm">💰 {{ "{:,}".format(fruit.price_beli) }}</span>
+          {% if fruit.price_robux %}<span class="text-xs ml-2" style="color:var(--text3)">💎 {{ fruit.price_robux }}</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm" style="color:var(--text3)">No data yet.</p>
+    {% endif %}
+  </div>
+
+  <!-- Mirage Stock -->
+  <div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+    <h4 class="text-sm font-medium mb-3">✨ Mirage Stock</h4>
+    {% if mirage_stock %}
+    <div class="space-y-2">
+      {% for fruit in mirage_stock %}
+      {% set rarity_color = 'text-red-400' if fruit.rarity == 'mythical' else 'text-yellow-400' if fruit.rarity == 'legendary' else 'text-purple-400' if fruit.rarity == 'rare' else 'text-blue-400' if fruit.rarity == 'uncommon' else 'text-gray-400' %}
+      <div class="flex items-center justify-between py-1.5 px-3 rounded-lg" style="background:var(--bg3)">
+        <div>
+          <span class="text-sm font-medium">{{ fruit.fruit_name }}</span>
+          <span class="text-[10px] ml-2 {{ rarity_color }}">{{ fruit.rarity|title }}</span>
+        </div>
+        <div class="text-right">
+          <span class="text-sm">💰 {{ "{:,}".format(fruit.price_beli) }}</span>
+          {% if fruit.price_robux %}<span class="text-xs ml-2" style="color:var(--text3)">💎 {{ fruit.price_robux }}</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm" style="color:var(--text3)">No data yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- LOGS TAB -->
+<div class="tab-panel {% if active_tab=='logs' %}active{% endif %}" data-tab-group="m" data-tab="logs">
+  <div class="flex items-center justify-between mb-3">
+    <h4 class="text-xs" style="color:var(--text2)">Activity Log</h4>
+    <a href="/services/fruityblox?tab=logs" class="text-[10px] px-2 py-1 rounded" style="background:var(--bg3);color:var(--text2)">↻ Refresh</a>
+  </div>
+  <div class="rounded-xl overflow-hidden" style="background:var(--bg2);border:1px solid var(--border)">
+    <div class="max-h-[500px] overflow-y-auto" id="log-box">
+      {% if logs %}
+      {% for line in logs %}
+      {% set line = line.rstrip() %}
+      {% if line %}
+      <div class="px-3 py-1 text-[11px] font-mono {% if 'ERROR' in line or '✗' in line %}text-red-400 bg-red-500/5{% elif 'WARNING' in line or '⚠' in line %}text-yellow-400 bg-yellow-500/5{% elif '✓' in line or 'success' in line.lower() %}text-emerald-400{% elif '🔄' in line %}text-blue-400{% else %}text-gray-300{% endif %}" style="border-bottom:1px solid var(--border)">{{ line }}</div>
+      {% endif %}
+      {% endfor %}
+      {% else %}
+      <div class="p-4 text-sm text-center" style="color:var(--text3)">No logs yet.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- STATS TAB -->
+<div class="tab-panel {% if active_tab=='stats' %}active{% endif %}" data-tab-group="m" data-tab="stats">
+  <div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+    <h4 class="text-sm font-medium mb-3">Scrape Runs (7 days)</h4>
+    {% if stats %}
+    <table class="w-full text-xs">
+      <thead>
+        <tr style="color:var(--text3)">
+          <th class="text-left py-1">Date</th>
+          <th class="text-center py-1">Runs</th>
+          <th class="text-center py-1">Success</th>
+          <th class="text-center py-1">New Rotations</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in stats %}
+        <tr style="border-top:1px solid var(--border)">
+          <td class="py-1.5">{{ row.date }}</td>
+          <td class="text-center py-1.5">{{ row.total_runs }}</td>
+          <td class="text-center py-1.5 text-emerald-400">{{ row.success_runs }}</td>
+          <td class="text-center py-1.5 text-blue-400">{{ row.new_rotations }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-sm" style="color:var(--text3)">No stats yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+</div>
+
+<script>
+// Auto scroll logs to bottom
+const logBox = document.getElementById('log-box');
+if (logBox) logBox.scrollTop = logBox.scrollHeight;
+</script>
+{% endblock %}

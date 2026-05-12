@@ -9,22 +9,32 @@
 <p class="text-gray-500 text-xs mb-3">Anime ongoing dari Otakudesu — bookmark = watchlist notifikasi Discord</p>
 
 <!-- Scrape Info Bar -->
+<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 mb-4">
+<div class="flex flex-wrap items-center gap-3 text-[10px]">
+<div class="flex items-center gap-1.5">
+<span class="text-gray-500">🕐</span>
+<span class="text-gray-300 font-mono" id="server-clock">{{ server_time }}</span>
+</div>
 {% if scrape_info %}
-<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 mb-4 flex flex-wrap items-center gap-3 text-[10px]">
+<div class="text-gray-700">|</div>
 <div class="flex items-center gap-1.5">
 <div class="w-2 h-2 bg-emerald-500 rounded-full pg"></div>
 <span class="text-gray-400">Scraper aktif</span>
 </div>
-<div class="text-gray-500">|</div>
-<div><span class="text-gray-500">Terakhir scrape:</span> <span class="text-gray-300">{{ scrape_info.finished_at[:19] if scrape_info.finished_at else "—" }}</span></div>
-<div class="text-gray-500">|</div>
-<div><span class="text-gray-500">Durasi:</span> <span class="text-gray-300">{{ "%.1f"|format(scrape_info.duration_sec) }}s</span></div>
-<div class="text-gray-500">|</div>
-<div><span class="text-gray-500">Next:</span> <span class="text-indigo-400 font-medium">{{ next_scrape }}</span></div>
-<div class="text-gray-500">|</div>
+<div class="text-gray-700">|</div>
+<div><span class="text-gray-500">Last:</span> <span class="text-gray-300">{{ last_scrape_time }}</span></div>
+<div class="text-gray-700">|</div>
+<div><span class="text-gray-500">Durasi:</span> <span class="text-gray-300">{{ "%.1f"|format(scrape_duration) }}s</span></div>
+<div class="text-gray-700">|</div>
+<div><span class="text-gray-500">Next scrape:</span> <span class="text-indigo-400 font-medium font-mono" id="next-scrape">{{ next_scrape }}</span></div>
+<div class="text-gray-700">|</div>
 <div><span class="text-gray-500">Result:</span> <span class="text-gray-300">{{ scrape_info.total_komik }} anime, {{ scrape_info.new_updates }} baru</span></div>
-</div>
+{% else %}
+<div class="text-gray-700">|</div>
+<span class="text-gray-500">Menunggu scrape pertama...</span>
 {% endif %}
+</div>
+</div>
 
 <!-- Filter & Search -->
 <div class="flex flex-col sm:flex-row gap-2 mb-4">
@@ -226,5 +236,24 @@ function closeAnimeModal(){
 }
 
 document.addEventListener('keydown', e=>{if(e.key==='Escape')closeAnimeModal()});
+
+// Realtime server clock
+(function(){
+  const clockEl = document.getElementById('server-clock');
+  if(!clockEl) return;
+  // Parse initial server time
+  const parts = '{{ server_time }}'.split(':');
+  let h = parseInt(parts[0]), m = parseInt(parts[1]), s = parseInt(parts[2]);
+
+  function tick(){
+    s++;
+    if(s>=60){s=0;m++}
+    if(m>=60){m=0;h++}
+    if(h>=24){h=0}
+    clockEl.textContent = 
+      String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+  }
+  setInterval(tick, 1000);
+})();
 </script>
 {% endblock %}

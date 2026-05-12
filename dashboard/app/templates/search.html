@@ -1,121 +1,84 @@
-{% extends "base.html" %}{% block title %}Search{% endblock %}
+{% extends "base.html" %}
+{% block title %}Search Komik{% endblock %}
 {% block content %}
-<style>
-.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:50;display:none;align-items:center;justify-content:center}
-.modal-bg.show{display:flex}
-.ch-list{max-height:250px;overflow-y:auto}.ch-list::-webkit-scrollbar{width:4px}.ch-list::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
-.g{font-size:9px;padding:1px 5px;border-radius:9999px;border:1px solid var(--border);color:var(--text2)}
-.sr:hover{opacity:.85;cursor:pointer}
-</style>
+<div class="max-w-5xl">
 
-<h2 class="text-lg sm:text-xl font-bold mb-1">🔍 Search Database</h2>
-<p class="text-xs mb-4" style="color:var(--text3)">{{ total_komik }} komik · {{ total_ch }} chapter dari semua source</p>
-
-<input type="text" id="q" value="{{ q }}" placeholder="Ketik judul komik..." autofocus oninput="liveSearch()"
-class="w-full px-4 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4" style="background:var(--bg2);border:1px solid var(--border);color:var(--text)">
-
-<div id="info" class="text-xs mb-3" style="color:var(--text3)"></div>
-<div id="results" class="space-y-2"></div>
-
-<!-- Detail Modal -->
-<div class="modal-bg" id="dm" onclick="if(event.target===this)this.classList.remove('show')">
-<div class="w-full max-w-lg max-h-[90vh] overflow-y-auto mx-2 sm:mx-4 p-4 sm:p-5 rounded-2xl" style="background:var(--bg2);border:1px solid var(--border)">
-<div class="flex justify-between items-start mb-3">
-<h3 class="text-lg font-bold pr-4" id="dm-t"></h3>
-<button onclick="document.getElementById('dm').classList.remove('show')" class="text-xl" style="color:var(--text3)">×</button>
-</div>
-<div class="flex gap-4 mb-3">
-<img id="dm-img" src="" class="w-28 h-40 sm:w-32 sm:h-44 object-cover rounded-lg" style="background:var(--bg3)" onerror="this.style.display='none'">
-<div class="flex-1"><div id="dm-meta"></div><div id="dm-genres" class="flex flex-wrap gap-1 mt-2"></div></div>
-</div>
-<div id="dm-syn" class="text-[11px] mb-3 hidden" style="color:var(--text2)"></div>
-<div class="flex items-center justify-between mb-1">
-<h4 class="text-[10px] uppercase tracking-wider" style="color:var(--text3)">Chapters</h4>
-<span id="dm-chcount" class="text-[9px]" style="color:var(--text3)"></span>
-</div>
-<div id="dm-ch" class="ch-list space-y-0.5"></div>
-</div>
+<div class="mb-4">
+  <h2 class="text-xl font-bold">🔍 Search Komik</h2>
+  <p class="text-xs mt-1" style="color:var(--text3)">{{ total_komik|default(0) }} komik · {{ total_ch|default(0) }} chapters tersimpan</p>
 </div>
 
-<script>
-let timer;
-function liveSearch(){
-  clearTimeout(timer);
-  const q=document.getElementById('q').value.trim();
-  if(q.length<2){document.getElementById('results').innerHTML='';document.getElementById('info').textContent='Ketik minimal 2 huruf...';return;}
-  document.getElementById('info').textContent='Mencari...';
-  timer=setTimeout(()=>{
-    fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()).then(d=>{
-      document.getElementById('info').textContent=d.total+' hasil untuk "'+d.query+'"';
-      let h='';
-      d.results.forEach(k=>{
-        const ch=k.chapters&&k.chapters[0];
-        h+='<div class="sr flex gap-3 p-3 rounded-xl" style="background:var(--bg2);border:1px solid var(--border)" onclick="showDetail('+k.id+')">';
-        if(k.image)h+='<img src="'+k.image+'" class="w-14 h-20 object-cover rounded-lg flex-shrink-0" style="background:var(--bg3)" loading="lazy" onerror="this.style.display=\'none\'">';
-        h+='<div class="flex-1 min-w-0">';
-        h+='<div class="flex items-center gap-2"><p class="text-sm font-medium truncate">'+k.title+'</p><span class="text-[9px] px-1.5 py-0.5 rounded flex-shrink-0" style="background:var(--bg3);color:var(--text3)">'+k.source+'</span></div>';
-        h+='<div class="flex items-center gap-1 mt-0.5 flex-wrap">';
-        h+='<span class="text-[9px] px-1.5 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">'+(k.type||'?')+'</span>';
-        if(k.status)h+='<span class="text-[9px] '+(k.status.includes('Ongoing')?'text-emerald-400':'text-orange-400')+'">'+k.status+'</span>';
-        if(k.rating)h+='<span class="text-[9px] text-yellow-500">⭐'+k.rating+'</span>';
-        if(k.author)h+='<span class="text-[9px]" style="color:var(--text3)">✍️ '+k.author+'</span>';
-        h+='</div>';
-        if(k.genres&&k.genres.length)h+='<div class="flex flex-wrap gap-1 mt-1">'+k.genres.slice(0,4).map(g=>'<span class="g">'+g+'</span>').join('')+'</div>';
-        if(ch)h+='<div class="mt-1"><a href="'+ch.url+'" target="_blank" onclick="event.stopPropagation()" class="text-[10px] text-indigo-400">'+ch.text+(ch.date?' · '+ch.date:'')+'</a></div>';
-        h+='</div></div>';
-      });
-      document.getElementById('results').innerHTML=h;
-    });
-  },300);
-}
+<!-- Search & Filter -->
+<form method="GET" action="/search" class="flex flex-wrap gap-2 mb-6">
+  <input
+    type="text" name="q" value="{{ q }}"
+    placeholder="Cari judul komik..."
+    class="flex-1 min-w-[200px] px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+    style="background:var(--bg2);border:1px solid var(--border);color:var(--text)"
+    autofocus
+  >
+  <select name="type" class="px-3 py-2 rounded-lg text-sm focus:outline-none" style="background:var(--bg2);border:1px solid var(--border);color:var(--text)">
+    <option value="" {% if not filter_type %}selected{% endif %}>Semua Tipe</option>
+    <option value="Manga" {% if filter_type=='Manga' %}selected{% endif %}>Manga</option>
+    <option value="Manhwa" {% if filter_type=='Manhwa' %}selected{% endif %}>Manhwa</option>
+    <option value="Manhua" {% if filter_type=='Manhua' %}selected{% endif %}>Manhua</option>
+  </select>
+  <select name="status" class="px-3 py-2 rounded-lg text-sm focus:outline-none" style="background:var(--bg2);border:1px solid var(--border);color:var(--text)">
+    <option value="" {% if not filter_status %}selected{% endif %}>Semua Status</option>
+    <option value="Ongoing" {% if filter_status=='Ongoing' %}selected{% endif %}>Ongoing</option>
+    <option value="Completed" {% if filter_status=='Completed' %}selected{% endif %}>Completed</option>
+  </select>
+  <button type="submit" class="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white">Cari</button>
+</form>
 
-function showDetail(id){
-  fetch('/api/komik/'+id).then(r=>r.json()).then(k=>{
-    if(k.error)return;
-    document.getElementById('dm-t').textContent=k.title;
-    const img=document.getElementById('dm-img');
-    if(k.image){img.src=k.image;img.style.display='block'}else img.style.display='none';
-    let m='';
-    m+='<p class="text-[11px]"><span style="color:var(--text3)">Type:</span> '+(k.type||'?')+'</p>';
-    m+='<p class="text-[11px]"><span style="color:var(--text3)">Status:</span> '+(k.status||'?')+'</p>';
-    m+='<p class="text-[11px]"><span style="color:var(--text3)">Rating:</span> '+(k.rating||'?')+'</p>';
-    m+='<p class="text-[11px]"><span style="color:var(--text3)">Source:</span> '+k.source+'</p>';
-    if(k.author)m+='<p class="text-[11px]"><span style="color:var(--text3)">Author:</span> '+k.author+'</p>';
-    if(k.alt_title)m+='<p class="text-[9px] mt-1" style="color:var(--text3)">'+k.alt_title.substring(0,120)+'</p>';
-    document.getElementById('dm-meta').innerHTML=m;
-    document.getElementById('dm-genres').innerHTML=(k.genres||[]).map(g=>'<span class="g">'+g+'</span>').join('');
-    const sd=document.getElementById('dm-syn');
-    if(k.synopsis){sd.textContent=k.synopsis;sd.classList.remove('hidden')}else sd.classList.add('hidden');
-    document.getElementById('dm-chcount').textContent=k.chapters.length+' chapters';
-    let c='';
-    let readCount=0;
-    (k.chapters||[]).forEach((ch,i)=>{
-      const isRead=ch.read;
-      if(isRead)readCount++;
-      c+='<div id="ch-row-'+i+'" class="flex items-center justify-between px-2 py-1 rounded '+(isRead?'opacity-50':'')+'" style="border-bottom:1px solid var(--border)">';
-      c+='<span id="ch-txt-'+i+'" class="text-[11px] '+(isRead?'line-through':'')+'" style="color:var(--text2)">'+ch.text+(isRead?' ✓':'')+'</span>';
-      c+='<div class="flex items-center gap-2">';
-      if(ch.date)c+='<span class="text-[9px]" style="color:var(--text3)">'+ch.date+'</span>';
-      c+='<a href="/read?url='+encodeURIComponent(ch.url)+'" onclick="markChRead('+i+',\''+ch.url+'\',\''+ch.text+'\')" class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/40">Baca</a>';
-      c+='<a href="'+ch.url+'" target="_blank" onclick="markChRead('+i+',\''+ch.url+'\',\''+ch.text+'\')" class="text-[9px] px-1.5 py-0.5 rounded text-indigo-400 hover:opacity-70" style="background:var(--bg3)">↗</a>';
-      c+='</div></div>';
-    });
-    document.getElementById('dm-chcount').textContent=k.chapters.length+' chapters'+(readCount?' · '+readCount+' dibaca':'');
-    document.getElementById('dm-ch').innerHTML=c||'<p class="text-[11px] p-2" style="color:var(--text3)">No chapters</p>';
-    document.getElementById('dm').classList.add('show');
-  });
-}
+<!-- Results -->
+{% if results %}
+<div class="flex items-center justify-between mb-3">
+  <div class="text-xs" style="color:var(--text3)">
+    {{ results|length }} hasil{% if q %} untuk "<strong style="color:var(--text)">{{ q }}</strong>"{% endif %}
+  </div>
+  <button id="sort-btn" onclick="toggleSort()" class="px-3 py-1 rounded text-xs flex items-center gap-1" style="background:var(--bg2);border:1px solid var(--border);color:var(--text2)">
+    <span id="sort-icon">↓</span> <span id="sort-label">Terbaru</span>
+  </button>
+</div>
+<div id="results-list" class="space-y-2" data-sort="desc">
+  {% for k in results %}
+  <a href="/komik/{{ k.id }}" class="flex items-center gap-3 p-3 rounded-xl hover:opacity-80 transition-opacity" style="background:var(--bg2);border:1px solid var(--border)">
+    {% if k.image %}
+    <img src="{{ k.image }}" alt="{{ k.title }}" class="w-12 h-16 object-cover rounded flex-shrink-0" loading="lazy" onerror="this.style.display='none'">
+    {% else %}
+    <div class="w-12 h-16 rounded flex-shrink-0" style="background:var(--bg3)"></div>
+    {% endif %}
+    <div class="flex-1 min-w-0">
+      <p class="text-sm font-medium truncate" style="color:var(--text)">{{ k.title }}</p>
+      <div class="flex flex-wrap items-center gap-1 mt-0.5">
+        {% if k.type %}<span class="text-[10px] px-1.5 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">{{ k.type }}</span>{% endif %}
+        {% if k.status %}<span class="text-[10px] px-1.5 py-0.5 rounded {% if k.status == 'Ongoing' %}bg-emerald-500/20 text-emerald-400{% else %}bg-gray-500/20 text-gray-400{% endif %}">{{ k.status }}</span>{% endif %}
+        {% for g in k.genres[:3] %}<span class="text-[10px]" style="color:var(--text3)">{{ g }}</span>{% if not loop.last %}<span style="color:var(--text3)">·</span>{% endif %}{% endfor %}
+      </div>
+      {% if k.last_chapter %}
+      <p class="text-[11px] mt-1 text-indigo-400">🆕 {{ k.last_chapter }}{% if k.last_chapter_date %} · {{ k.last_chapter_date }}{% endif %}</p>
+      {% endif %}
+    </div>
+    <div class="text-right flex-shrink-0">
+      {% if k.total_chapters %}<p class="text-[11px]" style="color:var(--text3)">{{ k.total_chapters }} ch</p>{% endif %}
+      <p class="text-[10px] mt-1 text-indigo-400">Lihat →</p>
+    </div>
+  </a>
+  {% endfor %}
+{% elif q %}
+<div class="text-center py-12" style="color:var(--text3)">
+  <div class="text-4xl mb-2">🔍</div>
+  <p class="text-sm">Tidak ada hasil untuk "<strong>{{ q }}</strong>"</p>
+  <p class="text-xs mt-1">Coba kata kunci lain atau jalankan full scan untuk menambah data</p>
+</div>
+{% else %}
+<div class="text-center py-12" style="color:var(--text3)">
+  <div class="text-4xl mb-2">📚</div>
+  <p class="text-sm">Ketik judul komik untuk mencari</p>
+  <p class="text-xs mt-1">Atau <a href="/search?q=" class="text-indigo-400">lihat semua komik</a></p>
+</div>
+{% endif %}
 
-function markChRead(i,url,text){
-  const row=document.getElementById('ch-row-'+i);
-  const txt=document.getElementById('ch-txt-'+i);
-  if(row&&!row.classList.contains('opacity-50')){
-    row.classList.add('opacity-50');
-    txt.classList.add('line-through');
-    txt.textContent=text+' ✓';
-    fetch('/api/read',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'url='+encodeURIComponent(url)});
-  }
-}
-{% if q %}liveSearch();{% endif %}
-</script>
+</div>
 {% endblock %}

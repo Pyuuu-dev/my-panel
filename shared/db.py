@@ -135,16 +135,79 @@ CREATE TABLE IF NOT EXISTS anime_watch_status (
     watched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- FruityBlox stock data
+CREATE TABLE IF NOT EXISTS fruityblox_stock (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_type TEXT NOT NULL,
+    fruit_name TEXT NOT NULL,
+    price_beli INTEGER NOT NULL,
+    price_robux INTEGER,
+    rarity TEXT,
+    image_url TEXT,
+    scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    rotation_id TEXT NOT NULL
+);
+
+-- FruityBlox rotations tracking
+CREATE TABLE IF NOT EXISTS fruityblox_rotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rotation_id TEXT UNIQUE NOT NULL,
+    stock_type TEXT NOT NULL,
+    fruit_count INTEGER NOT NULL,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    notified BOOLEAN DEFAULT 0,
+    notification_sent_at TIMESTAMP
+);
+
+-- FruityBlox configuration
+CREATE TABLE IF NOT EXISTS fruityblox_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- FruityBlox scrape runs
+CREATE TABLE IF NOT EXISTS fruityblox_scrape_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_type TEXT NOT NULL,
+    total_fruits INTEGER NOT NULL,
+    new_rotation BOOLEAN DEFAULT 0,
+    rotation_id TEXT,
+    duration REAL,
+    status TEXT NOT NULL,
+    error_message TEXT,
+    finished_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Komiku full scan state
+CREATE TABLE IF NOT EXISTS komiku_scan_state (
+    id INTEGER PRIMARY KEY,
+    last_page INTEGER DEFAULT 0,
+    total_pages INTEGER DEFAULT 717,
+    total_komik INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'idle',
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_komik_title ON komik(title);
 CREATE INDEX IF NOT EXISTS idx_komik_source ON komik(source);
+CREATE INDEX IF NOT EXISTS idx_komik_updated_at ON komik(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_komik_source_updated ON komik(source, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chapters_komik ON chapters(komik_id);
+CREATE INDEX IF NOT EXISTS idx_chapters_komik_desc ON chapters(komik_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_chapters_url ON chapters(url);
 CREATE INDEX IF NOT EXISTS idx_read_chapter ON read_status(chapter_id);
 CREATE INDEX IF NOT EXISTS idx_scrape_runs_source ON scrape_runs(source);
 CREATE INDEX IF NOT EXISTS idx_anime_title ON anime(title);
 CREATE INDEX IF NOT EXISTS idx_anime_source ON anime(source);
 CREATE INDEX IF NOT EXISTS idx_anime_episodes_anime ON anime_episodes(anime_id);
 CREATE INDEX IF NOT EXISTS idx_anime_watch ON anime_watch_status(episode_id);
+CREATE INDEX IF NOT EXISTS idx_fruityblox_stock_type_rotation ON fruityblox_stock(stock_type, rotation_id);
+CREATE INDEX IF NOT EXISTS idx_fruityblox_scraped_at ON fruityblox_stock(scraped_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fruityblox_rotations_type ON fruityblox_rotations(stock_type, started_at DESC);
 """
 
 
@@ -154,6 +217,10 @@ def get_db() -> sqlite3.Connection:
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")
+    db.execute("PRAGMA cache_size=-64000")
+    db.execute("PRAGMA temp_store=MEMORY")
+    db.execute("PRAGMA mmap_size=268435456")
+    db.execute("PRAGMA synchronous=NORMAL")
     return db
 
 
@@ -329,6 +396,232 @@ def upsert_anime_episodes(db: sqlite3.Connection, anime_id: int, episodes: list[
         except Exception:
             pass
     return new_count
+
+
+# ── FruityBlox Functions ────────────────────────────────────
+def get_fruityblox_config(db: sqlite3.Connection, key: str) -> str:
+    """Get FruityBlox config value."""
+    row = db.execute("SELECT value FROM fruityblox_config WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else ""
+
+
+def set_fruityblox_config(db: sqlite3.Connection, key: str, value: str):
+    """Set FruityBlox config value."""
+    db.execute("""
+        INSERT OR REPLACE INTO fruityblox_config (key, value, updated_at)
+        VALUES (?, ?, ?)
+    """, (key, value, datetime.now().isoformat()))
+    db.commit()
+
+
+def get_all_fruityblox_config(db: sqlite3.Connection) -> dict:
+    """Get all FruityBlox config as dict."""
+    rows = db.execute("SELECT key, value FROM fruityblox_config").fetchall()
+    return {row["key"]: row["value"] for row in rows}
+
+
+def save_fruityblox_stock(db: sqlite3.Connection, stock_type: str, fruits: list[dict], rotation_id: str):
+    """Save FruityBlox stock to database."""
+    for fruit in fruits:
+        db.execute("""
+            INSERT INTO fruityblox_stock (stock_type, fruit_name, price_beli, price_robux, rarity, image_url, rotation_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            stock_type,
+            fruit["name"],
+            fruit["price"],
+            fruit.get("robux", 0),
+            fruit.get("rarity", "unknown"),
+            fruit.get("image_url", ""),
+            rotation_id
+        ))
+    db.commit()
+
+
+def save_fruityblox_rotation(db: sqlite3.Connection, rotation_id: str, stock_type: str, fruit_count: int):
+    """Save FruityBlox rotation record."""
+    db.execute("""
+        INSERT OR IGNORE INTO fruityblox_rotations (rotation_id, stock_type, fruit_count)
+        VALUES (?, ?, ?)
+    """, (rotation_id, stock_type, fruit_count))
+    db.commit()
+
+
+def update_fruityblox_rotation_notified(db: sqlite3.Connection, rotation_id: str):
+    """Mark rotation as notified."""
+    db.execute("""
+        UPDATE fruityblox_rotations
+        SET notified = 1, notification_sent_at = ?
+        WHERE rotation_id = ?
+    """, (datetime.now().isoformat(), rotation_id))
+    db.commit()
+
+
+def get_latest_fruityblox_stock(db: sqlite3.Connection, stock_type: str) -> list[dict]:
+    """Get latest stock for a type."""
+    rows = db.execute("""
+        SELECT fruit_name, price_beli, price_robux, rarity, image_url, scraped_at
+        FROM fruityblox_stock
+        WHERE stock_type = ? AND rotation_id = (
+            SELECT rotation_id FROM fruityblox_rotations
+            WHERE stock_type = ?
+            ORDER BY started_at DESC LIMIT 1
+        )
+        ORDER BY price_beli DESC
+    """, (stock_type, stock_type)).fetchall()
+    
+    return [dict(row) for row in rows]
+
+
+def get_fruityblox_rotation_history(db: sqlite3.Connection, days: int = 7) -> list[dict]:
+    """Get rotation history for last N days."""
+    rows = db.execute("""
+        SELECT r.rotation_id, r.stock_type, r.fruit_count, r.started_at, r.notified,
+               GROUP_CONCAT(s.fruit_name, '|') as fruits
+        FROM fruityblox_rotations r
+        LEFT JOIN fruityblox_stock s ON r.rotation_id = s.rotation_id
+        WHERE r.started_at >= datetime('now', '-' || ? || ' days')
+        GROUP BY r.rotation_id
+        ORDER BY r.started_at DESC
+    """, (days,)).fetchall()
+    
+    result = []
+    for row in rows:
+        data = dict(row)
+        data["fruits"] = data["fruits"].split("|") if data["fruits"] else []
+        result.append(data)
+    
+    return result
+
+
+def log_fruityblox_scrape_run(db: sqlite3.Connection, stock_type: str, total_fruits: int, 
+                               new_rotation: bool, rotation_id: str, duration: float, 
+                               status: str, error_message: str = ""):
+    """Log FruityBlox scrape run."""
+    db.execute("""
+        INSERT INTO fruityblox_scrape_runs (stock_type, total_fruits, new_rotation, rotation_id, duration, status, error_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (stock_type, total_fruits, new_rotation, rotation_id, duration, status, error_message))
+    db.commit()
+
+
+def init_fruityblox_config(db: sqlite3.Connection):
+    """Initialize default FruityBlox config if not exists."""
+    defaults = {
+        'discord_webhook_url': '',
+        'discord_channel_id': '',
+        'discord_mentions': '',
+        'notify_normal': '1',
+        'notify_mirage': '1',
+        'check_interval_minutes': '240',
+        'last_normal_rotation_id': '',
+        'last_mirage_rotation_id': ''
+    }
+    
+    for key, value in defaults.items():
+        db.execute("""
+            INSERT OR IGNORE INTO fruityblox_config (key, value)
+            VALUES (?, ?)
+        """, (key, value))
+    db.commit()
+
+
+# ── Komiku Full Library Functions ───────────────────────────
+
+def migrate_komiku_columns(db: sqlite3.Connection):
+    """Add new columns to komik table if not exist."""
+    existing = [row[1] for row in db.execute("PRAGMA table_info(komik)").fetchall()]
+    migrations = [
+        ("fully_scanned", "BOOLEAN DEFAULT 0"),
+        ("total_chapters", "INTEGER DEFAULT 0"),
+        ("first_chapter", "TEXT DEFAULT ''"),
+        ("first_chapter_url", "TEXT DEFAULT ''"),
+    ]
+    for col, definition in migrations:
+        if col not in existing:
+            db.execute(f"ALTER TABLE komik ADD COLUMN {col} {definition}")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_komik_fully_scanned ON komik(source, fully_scanned)")
+    db.commit()
+
+
+def delete_komikindo_data(db: sqlite3.Connection):
+    """Delete all komikindo data from DB."""
+    db.execute("""
+        DELETE FROM read_status WHERE chapter_id IN (
+            SELECT c.id FROM chapters c
+            JOIN komik k ON c.komik_id = k.id
+            WHERE k.source = 'komikindo'
+        )
+    """)
+    db.execute("""
+        DELETE FROM bookmarks WHERE komik_id IN (
+            SELECT id FROM komik WHERE source = 'komikindo'
+        )
+    """)
+    db.execute("DELETE FROM chapters WHERE komik_id IN (SELECT id FROM komik WHERE source='komikindo')")
+    db.execute("DELETE FROM komik WHERE source='komikindo'")
+    db.commit()
+
+
+def get_komiku_scan_state(db: sqlite3.Connection) -> dict:
+    """Get current full scan state."""
+    row = db.execute("SELECT * FROM komiku_scan_state WHERE id=1").fetchone()
+    if not row:
+        db.execute("""
+            INSERT OR IGNORE INTO komiku_scan_state (id, last_page, total_pages, total_komik, status)
+            VALUES (1, 0, 717, 0, 'idle')
+        """)
+        db.commit()
+        row = db.execute("SELECT * FROM komiku_scan_state WHERE id=1").fetchone()
+    return dict(row)
+
+
+def update_komiku_scan_state(db: sqlite3.Connection, **kwargs):
+    """Update scan state fields."""
+    kwargs['updated_at'] = datetime.now().isoformat()
+    sets = ', '.join(f"{k}=?" for k in kwargs)
+    vals = list(kwargs.values()) + [1]
+    db.execute(f"UPDATE komiku_scan_state SET {sets} WHERE id=?", vals)
+    db.commit()
+
+
+def get_komiku_recent_updates(db: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    """Get recently updated komiku komik."""
+    rows = db.execute("""
+        SELECT id, title, url, image, type, status, genres,
+               last_chapter, last_chapter_url, last_chapter_date,
+               total_chapters, fully_scanned, updated_at
+        FROM komik
+        WHERE source = 'komiku'
+        ORDER BY updated_at DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d['genres'] = json.loads(d['genres']) if d.get('genres') else []
+        result.append(d)
+    return result
+
+
+def get_komiku_by_url(db: sqlite3.Connection, url: str) -> dict | None:
+    """Get komik by URL."""
+    row = db.execute("SELECT * FROM komik WHERE url=?", (url,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_komik_fully_scanned(db: sqlite3.Connection, komik_id: int, total_chapters: int,
+                                first_chapter: str = '', first_chapter_url: str = ''):
+    """Mark komik as fully scanned."""
+    db.execute("""
+        UPDATE komik SET fully_scanned=1, total_chapters=?, first_chapter=?, first_chapter_url=?, updated_at=?
+        WHERE id=?
+    """, (total_chapters, first_chapter, first_chapter_url, datetime.now().isoformat(), komik_id))
+
+
+def update_komik_total_chapters(db: sqlite3.Connection, komik_id: int, total: int):
+    """Update total_chapters count."""
+    db.execute("UPDATE komik SET total_chapters=? WHERE id=?", (total, komik_id))
 
 
 # Initialize on import

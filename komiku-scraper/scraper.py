@@ -1,5 +1,6 @@
-"""Komiku Scraper - komiku.org
-Scrapes from api.komiku.org/manga/ endpoint.
+"""
+Komiku Scraper v2 - komiku.org
+Full Library Scan + Update Tracker
 """
 import asyncio
 import json
@@ -14,111 +15,74 @@ from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 LOG_FILE = "/opt/services/logs/komiku-scraper.log"
-STATE_FILE = Path(__file__).parent / "output" / ".state.json"
 
-
-def load_config():
-    with open(CONFIG_PATH) as f:
-        return yaml.safe_load(f)
-
-config = load_config()
+sys.path.insert(0, "/opt/services/shared")
+import db as db_module
 
 logging.basicConfig(
-    level=getattr(logging, config["logging"]["level"], logging.INFO),
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler(sys.stdout)],
+    stream=sys.stdout,
 )
 logger = logging.getLogger("komiku-scraper")
 
-output_dir = Path(config["output"]["directory"])
-output_dir.mkdir(parents=True, exist_ok=True)
+
+def load_config() -> dict:
+    with open(CONFIG_PATH) as f:
+        return yaml.safe_load(f)
 
 
-def load_json(path: Path) -> dict:
-    if path.exists():
-        try: return json.loads(path.read_text())
-        except Exception: pass
-    return {}
+# ── Parsing ─────────────────────────────────────────────────
 
-def save_json(path: Path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False))
-
-
-async def send_discord_webhook(url: str, embeds: list[dict]):
-    if not url: return
-    try:
-        headers = {"User-Agent": "KomikuScraper/1.0"}
-        async with httpx.AsyncClient(headers=headers) as c:
-            r = await c.post(url, json={"embeds": embeds[:10]}, timeout=10)
-            if r.status_code in (200, 204):
-                logger.info(f"[Webhook] Sent {len(embeds)} embed(s)")
-            else:
-                logger.warning(f"[Webhook] Discord {r.status_code}")
-    except Exception as e:
-        logger.warning(f"[Webhook] Failed: {e}")
-
-
-def parse_komiku_api(html: str) -> list[dict]:
-    """Parse komiku.org API response HTML."""
+def parse_listing_page(html: str) -> list[dict]:
+    """Parse listing page: 10 komik per page."""
     soup = BeautifulSoup(html, "lxml")
     results = []
-
     for item in soup.select("div.bge"):
         try:
-            # Title & URL
             title_el = item.select_one("div.kan h3")
-            title = title_el.get_text(strip=True) if title_el else "Unknown"
+            title = title_el.get_text(strip=True) if title_el else ""
+            if not title:
+                continue
 
             url_el = item.select_one("div.kan > a")
             url = url_el["href"] if url_el else ""
 
-            # Image
             img = item.select_one("div.bgei img")
-            image = ""
-            if img:
-                image = img.get("src", "") or img.get("data-src", "")
+            image = (img.get("src") or img.get("data-src") or "") if img else ""
 
-            # Type & Genre
             type_el = item.select_one("div.tpe1_inf b")
             komik_type = type_el.get_text(strip=True) if type_el else ""
-            genre_el = item.select_one("div.tpe1_inf")
-            genre_text = genre_el.get_text(strip=True).replace(komik_type, "", 1).strip() if genre_el else ""
 
-            # Readers, time, color from span.judul2
+            genre_el = item.select_one("div.tpe1_inf")
+            genre_text = ""
+            if genre_el:
+                genre_text = genre_el.get_text(strip=True).replace(komik_type, "", 1).strip()
+
             info_el = item.select_one("span.judul2")
-            readers = ""
             time_ago = ""
             is_color = False
             if info_el:
                 info_text = info_el.get_text(strip=True)
-                # Parse: "1.7jt pembaca | 12 menit lalu | Berwarna"
                 parts = [p.strip() for p in info_text.split("|")]
-                if len(parts) >= 1:
-                    readers = parts[0].replace("pembaca", "").strip()
                 if len(parts) >= 2:
                     time_ago = parts[1].strip()
-                if "Berwarna" in info_text:
-                    is_color = True
+                is_color = "Berwarna" in info_text
 
-            # Synopsis
             synopsis_el = item.select_one("div.kan > p")
             synopsis = synopsis_el.get_text(strip=True) if synopsis_el else ""
 
-            # Chapters (first & latest)
-            chapters = []
-            for ch_div in item.select("div.new1 a"):
-                ch_title = ch_div.get("title", "")
-                ch_url = ch_div.get("href", "")
-                if ch_url and not ch_url.startswith("http"):
-                    ch_url = config["scraper"]["base_url"] + ch_url
-                # Extract chapter text from spans
-                spans = ch_div.select("span")
-                ch_text = spans[-1].get_text(strip=True) if spans else ch_div.get_text(strip=True)
-                chapters.append({
-                    "text": ch_text,
-                    "url": ch_url,
-                    "date": time_ago if ch_div == item.select("div.new1 a")[-1] else "",
-                })
+            # Latest chapter (last div.new1)
+            ch_divs = item.select("div.new1 a")
+            latest_ch_text = ""
+            latest_ch_url = ""
+            if ch_divs:
+                last = ch_divs[-1]
+                spans = last.select("span")
+                latest_ch_text = spans[-1].get_text(strip=True) if spans else last.get_text(strip=True)
+                latest_ch_url = last.get("href", "")
+                if latest_ch_url and not latest_ch_url.startswith("http"):
+                    latest_ch_url = "https://komiku.org" + latest_ch_url
 
             results.append({
                 "title": title,
@@ -126,48 +90,36 @@ def parse_komiku_api(html: str) -> list[dict]:
                 "image": image,
                 "type": komik_type,
                 "genres": [genre_text] if genre_text else [],
-                "rating": "",
-                "status": "",
                 "color": is_color,
-                "readers": readers,
                 "synopsis": synopsis,
-                "chapters": chapters,
-                "author": "",
-                "artist": "",
-                "alt_title": "",
-                "updated_at": "",
+                "last_chapter": latest_ch_text,
+                "last_chapter_url": latest_ch_url,
                 "last_chapter_date": time_ago,
             })
         except Exception as e:
-            logger.warning(f"Parse error: {e}")
-
+            logger.debug(f"Parse listing item error: {e}")
     return results
 
 
-def parse_komiku_detail(html: str) -> dict:
-    """Parse komiku.org detail page for full info."""
+def parse_detail_page(html: str) -> dict:
+    """Parse detail page: all chapters + full metadata."""
     soup = BeautifulSoup(html, "lxml")
     info = {}
 
-    # Genres from meta tags
-    info["genres"] = [m.get("content", "") for m in soup.select("meta[itemprop='genre']")]
+    info["genres"] = [m.get("content", "") for m in soup.select("meta[itemprop='genre']") if m.get("content")]
 
-    # Type from meta
     type_meta = soup.select_one("meta[itemprop='additionalType']")
     if type_meta:
         info["type"] = type_meta.get("content", "")
 
-    # Status from meta
     status_meta = soup.select_one("meta[itemprop='creativeWorkStatus']")
     if status_meta:
         info["status"] = status_meta.get("content", "")
 
-    # Author from meta
     author_meta = soup.select_one("span[itemprop='author'] meta[itemprop='name']")
     if author_meta:
         info["author"] = author_meta.get("content", "")
 
-    # Alt title from table
     for tr in soup.select("tr"):
         tds = tr.select("td")
         if len(tds) == 2:
@@ -176,23 +128,22 @@ def parse_komiku_detail(html: str) -> dict:
             if "Alternatif" in label:
                 info["alt_title"] = value
 
-    # All chapters from #daftarChapter
+    # All chapters from table (second table on page)
     chapters = []
-    for tr in soup.select("#daftarChapter tr"):
-        ch_link = tr.select_one("td.judulseries a[itemprop='url']")
-        ch_date_el = tr.select_one("td.tanggalseries")
-        if ch_link:
-            ch_name = tr.select_one("td.judulseries span[itemprop='name'] b")
-            ch_text = ch_name.get_text(strip=True) if ch_name else ch_link.get_text(strip=True)
-            ch_url = ch_link.get("href", "")
-            if ch_url and not ch_url.startswith("http"):
-                ch_url = "https://komiku.org" + ch_url
-            ch_date = ch_date_el.get_text(strip=True) if ch_date_el else ""
-            chapters.append({
-                "text": ch_text,
-                "url": ch_url,
-                "date": ch_date,
-            })
+    tables = soup.select("table")
+    chapter_table = tables[1] if len(tables) >= 2 else None
+    if chapter_table:
+        for tr in chapter_table.select("tr"):
+            link = tr.select_one("a[itemprop='url']")
+            date_el = tr.select_one("td.tanggalseries")
+            if link:
+                name_el = tr.select_one("span[itemprop='name'] b")
+                ch_text = name_el.get_text(strip=True) if name_el else link.get_text(strip=True)
+                ch_url = link.get("href", "")
+                if ch_url and not ch_url.startswith("http"):
+                    ch_url = "https://komiku.org" + ch_url
+                ch_date = date_el.get_text(strip=True) if date_el else ""
+                chapters.append({"text": ch_text, "url": ch_url, "date": ch_date})
 
     if chapters:
         info["chapters"] = chapters
@@ -200,260 +151,390 @@ def parse_komiku_detail(html: str) -> dict:
     return info
 
 
-async def fetch(client: httpx.AsyncClient, url: str) -> str | None:
-    for attempt in range(config["scraper"]["max_retries"]):
+# ── HTTP ─────────────────────────────────────────────────────
+
+async def fetch(client: httpx.AsyncClient, url: str, retries: int = 3) -> str | None:
+    for attempt in range(retries):
         try:
-            r = await client.get(url, timeout=config["scraper"]["timeout"], follow_redirects=True)
+            r = await client.get(url, timeout=30, follow_redirects=True)
             r.raise_for_status()
             return r.text
         except Exception as e:
-            logger.warning(f"  Fetch attempt {attempt+1} failed ({url[:50]}): {e}")
-            if attempt < config["scraper"]["max_retries"] - 1:
-                await asyncio.sleep(config["scraper"]["delay"])
+            if attempt < retries - 1:
+                await asyncio.sleep(2)
+            else:
+                logger.warning(f"Fetch failed ({url[:60]}): {e}")
     return None
 
 
-DETAIL_CACHE_FILE = Path(__file__).parent / "output" / ".detail_cache.json"
+# ── Discord ──────────────────────────────────────────────────
 
-async def scrape_detail(client: httpx.AsyncClient, komik: dict, cache: dict) -> dict:
-    """Fetch detail page for a komik and merge data."""
-    url = komik.get("url", "")
+async def send_discord(webhook_url: str, embeds: list[dict], content: str = ""):
+    if not webhook_url:
+        return
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(
+                webhook_url,
+                json={"content": content, "embeds": embeds[:10]},
+                headers={"User-Agent": "KomikuScraper/2.0"},
+                timeout=10,
+            )
+            if r.status_code in (200, 204):
+                logger.info(f"[Discord] Sent {len(embeds)} embed(s)")
+            else:
+                logger.warning(f"[Discord] Status {r.status_code}: {r.text[:100]}")
+    except Exception as e:
+        logger.warning(f"[Discord] Failed: {e}")
+
+
+def build_komik_embed(komik: dict, new_chapters: list[dict]) -> dict:
+    """Build Discord embed for komik update."""
+    ch_lines = ""
+    for ch in new_chapters[:5]:
+        line = f"• **{ch['text']}**"
+        if ch.get("date"):
+            line += f" — {ch['date']}"
+        if ch.get("url"):
+            line += f" [Baca]({ch['url']})"
+        ch_lines += line + "\n"
+
+    genres = ", ".join(komik.get("genres", [])[:4]) or "-"
+    total = komik.get("total_chapters", len(new_chapters))
+
+    embed = {
+        "title": f"📖 {komik['title']}",
+        "url": komik.get("url", ""),
+        "description": f"**{komik.get('type', '?')}** • {komik.get('status', '?')}\n🏷️ {genres}",
+        "color": 0xFF6B35,
+        "fields": [
+            {"name": f"🆕 Chapter Baru ({len(new_chapters)})", "value": ch_lines or "-", "inline": False},
+            {"name": "📚 Total", "value": str(total), "inline": True},
+        ],
+        "footer": {"text": "Komiku Scraper • komiku.org"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if komik.get("image"):
+        embed["thumbnail"] = {"url": komik["image"]}
+    return embed
+
+
+# ── Core Logic ───────────────────────────────────────────────
+
+async def process_komik_update(conn, client: httpx.AsyncClient, listing_item: dict,
+                                cfg: dict, delay: float = 1.0) -> bool:
+    """
+    Check if komik has new chapters. If yes, fetch detail and update DB.
+    Returns True if new chapters found.
+    """
+    url = listing_item.get("url", "")
     if not url:
-        return komik
+        return False
 
-    cache_key = komik["title"]
-    cached = cache.get(cache_key, {})
-    latest_ch = komik["chapters"][-1]["text"] if komik["chapters"] else ""
+    existing = db_module.get_komiku_by_url(conn, url)
 
-    # Use cache if chapter hasn't changed
-    if cached.get("latest_ch") == latest_ch and cached.get("genres"):
-        for k in ("genres", "author", "alt_title", "status", "type"):
-            if cached.get(k):
-                komik[k] = cached[k]
-        if cached.get("all_chapters"):
-            komik["chapters"] = cached["all_chapters"]
-        return komik
+    if existing and existing.get("last_chapter") == listing_item["last_chapter"]:
+        return False
 
-    logger.info(f"  Fetching detail: {komik['title']}")
+    logger.info(f"  🆕 Update: {listing_item['title']} → {listing_item['last_chapter']}")
+
     html = await fetch(client, url)
     if not html:
-        return komik
+        return False
 
-    detail = parse_komiku_detail(html)
+    detail = parse_detail_page(html)
+    all_chapters = detail.get("chapters", [])
 
-    # Merge
-    for field in ("genres", "author", "alt_title", "status", "type"):
-        if detail.get(field):
-            komik[field] = detail[field]
-    if detail.get("chapters"):
-        komik["chapters"] = detail["chapters"]
-
-    # Update cache
-    cache[cache_key] = {
-        "latest_ch": latest_ch,
-        "genres": komik.get("genres", []),
-        "author": komik.get("author", ""),
-        "alt_title": komik.get("alt_title", ""),
-        "status": komik.get("status", ""),
-        "type": komik.get("type", ""),
-        "all_chapters": komik.get("chapters", []),
+    # Merge listing + detail data
+    komik_data = {
+        "title": listing_item["title"],
+        "url": url,
+        "image": listing_item.get("image", ""),
+        "type": detail.get("type") or listing_item.get("type", ""),
+        "status": detail.get("status", ""),
+        "genres": detail.get("genres") or listing_item.get("genres", []),
+        "color": listing_item.get("color", False),
+        "synopsis": listing_item.get("synopsis", ""),
+        "author": detail.get("author", ""),
+        "alt_title": detail.get("alt_title", ""),
+        "source": "komiku",
+        "last_chapter": listing_item["last_chapter"],
+        "last_chapter_url": listing_item.get("last_chapter_url", ""),
+        "last_chapter_date": listing_item.get("last_chapter_date", ""),
     }
 
-    await asyncio.sleep(config["scraper"]["delay"])
-    return komik
+    komik_id = db_module.upsert_komik(conn, komik_data)
+    new_ch_count = db_module.upsert_chapters(conn, komik_id, all_chapters)
+
+    if all_chapters:
+        first = all_chapters[-1]
+        db_module.update_komik_fully_scanned(
+            conn, komik_id, len(all_chapters),
+            first.get("text", ""), first.get("url", "")
+        )
+    else:
+        db_module.update_komik_total_chapters(conn, komik_id, new_ch_count)
+
+    conn.commit()
+
+    # Discord notification
+    webhook_url = cfg.get("webhook", {}).get("discord_url", "")
+    notify_mode = cfg.get("webhook", {}).get("notify_mode", "bookmark")
+    enabled = cfg.get("webhook", {}).get("enabled", False)
+
+    if enabled and webhook_url and new_ch_count > 0:
+        should_notify = False
+        if notify_mode == "all":
+            should_notify = True
+        elif notify_mode == "bookmark":
+            bookmarked = db_module.get_bookmarked_komik_titles(conn)
+            should_notify = listing_item["title"].lower() in bookmarked
+
+        if should_notify:
+            new_chapters = all_chapters[:new_ch_count] if new_ch_count <= len(all_chapters) else all_chapters[:5]
+            komik_data["total_chapters"] = len(all_chapters)
+            embed = build_komik_embed(komik_data, new_chapters)
+            await send_discord(webhook_url, [embed])
+
+    await asyncio.sleep(delay)
+    return new_ch_count > 0
 
 
-async def run_scrape():
-    global config
-    config = load_config()
+# ── Full Scan ────────────────────────────────────────────────
 
-    api_url = config["scraper"]["api_url"]
-    detail_limit = config["scraper"].get("detail_limit", 10)
-    headers = {"User-Agent": config["scraper"]["user_agent"]}
-    webhook_cfg = config.get("webhook", {})
-    discord_url = webhook_cfg.get("discord_url", "") if webhook_cfg.get("enabled") else ""
+async def full_scan(cfg: dict):
+    """
+    Full library scan: loop all pages, fetch detail for each komik.
+    Sequential, resumable, skips already-scanned komik with no changes.
+    """
+    conn = db_module.get_db()
+    state = db_module.get_komiku_scan_state(conn)
 
-    # Watchlist = bookmark dari dashboard + config fallback
-    sys.path.insert(0, "/opt/services/shared")
-    from db import get_db, get_bookmarked_komik_titles
-    db = get_db()
-    watchlist = get_bookmarked_komik_titles(db)
-    db.close()
-    config_watchlist = [w.lower() for w in config.get("watchlist", [])]
-    watchlist = list(set(watchlist + config_watchlist))
+    start_page = state["last_page"] + 1
+    if start_page > 717:
+        logger.info("Full scan already completed (last_page=717). Reset to restart.")
+        db_module.update_komiku_scan_state(conn, status="done")
+        conn.close()
+        return
 
-    prev_state = load_json(STATE_FILE)
-    detail_cache = load_json(DETAIL_CACHE_FILE)
+    api_base = cfg["scraper"]["api_url"]
+    delay = cfg["scraper"].get("full_scan_delay", 0.5)
+    batch_size = cfg["scraper"].get("full_scan_batch_size", 50)
+    headers = {"User-Agent": cfg["scraper"]["user_agent"]}
 
-    logger.info(f"Starting scrape (komiku.org, {len(watchlist)} watchlist/bookmarks, detail_limit={detail_limit})")
+    db_module.update_komiku_scan_state(
+        conn, status="running", started_at=datetime.now().isoformat()
+    )
+    conn.close()
 
-    max_pages = config["scraper"].get("max_pages", 3)
+    logger.info(f"🔍 Full scan starting from page {start_page}/717")
 
-    # Phase 1: Fetch API listing (multiple pages)
-    all_results = []
-    seen_urls = set()
+    total_scanned = state["total_komik"]
+    batch_count = 0
+
     async with httpx.AsyncClient(headers=headers) as client:
-        for page in range(1, max_pages + 1):
-            page_url = api_url if page == 1 else f"{api_url}?page={page}"
-            logger.info(f"Fetching API page {page}: {page_url}")
-            html = await fetch(client, page_url)
-            if html:
-                results = parse_komiku_api(html)
-                # Deduplicate by URL
-                new_count = 0
-                for r in results:
-                    url = r.get("url", r.get("title", ""))
-                    if url not in seen_urls:
-                        seen_urls.add(url)
-                        all_results.append(r)
-                        new_count += 1
-                logger.info(f"  Page {page}: {len(results)} komik ({new_count} new, {len(results)-new_count} dupes skipped)")
-                if len(results) < 10:
-                    break  # No more pages
-            else:
+        for page in range(start_page, 718):
+            # Check if stop requested
+            conn = db_module.get_db()
+            current_state = db_module.get_komiku_scan_state(conn)
+            if current_state["status"] == "stop_requested":
+                logger.info(f"⏹ Full scan stopped at page {page}")
+                db_module.update_komiku_scan_state(conn, status="idle", last_page=page - 1)
+                conn.close()
+                return
+            conn.close()
+
+            # page/1/ redirects to /manga/, handle it
+            url = api_base if page == 1 else f"{api_base}{page}/"
+            html = await fetch(client, url)
+            if not html:
+                logger.warning(f"  Page {page}: fetch failed, skipping")
+                await asyncio.sleep(2)
+                continue
+
+            komik_list = parse_listing_page(html)
+            if not komik_list:
+                logger.info(f"  Page {page}: empty, scan complete")
                 break
-            if page < max_pages:
-                await asyncio.sleep(config["scraper"]["delay"])
 
-        if not all_results:
-            logger.warning("No results")
-            return 0
+            conn = db_module.get_db()
+            for item in komik_list:
+                if not item.get("url"):
+                    continue
 
-        # Phase 2: Fetch detail pages (for all chapters, genres, etc)
-        logger.info(f"Fetching detail for up to {detail_limit} komik...")
-        fetched = 0
-        for komik in all_results:
-            if fetched >= detail_limit:
-                break
-            await scrape_detail(client, komik, detail_cache)
-            fetched += 1
+                existing = db_module.get_komiku_by_url(conn, item["url"])
 
-    save_json(DETAIL_CACHE_FILE, detail_cache)
+                # Skip if fully scanned and no chapter change
+                if (existing and existing.get("fully_scanned")
+                        and existing.get("last_chapter") == item["last_chapter"]):
+                    continue
 
-    # Detect changes
-    new_updates = []
-    watchlist_hits = []
-    new_state = {}
+                # Fetch detail page
+                detail_html = await fetch(client, item["url"])
+                if not detail_html:
+                    continue
 
-    for komik in all_results:
-        title = komik["title"]
-        latest_ch = komik["chapters"][-1]["text"] if komik["chapters"] else ""
-        new_state[title] = latest_ch
-        prev_ch = prev_state.get(title, "")
+                detail = parse_detail_page(detail_html)
+                all_chapters = detail.get("chapters", [])
 
-        if latest_ch and latest_ch != prev_ch:
-            new_updates.append(komik)
-            for w in watchlist:
-                if w in title.lower():
-                    watchlist_hits.append(komik)
-                    logger.info(f"  ⭐ WATCHLIST: {title} → {latest_ch}")
-                    break
+                komik_data = {
+                    "title": item["title"],
+                    "url": item["url"],
+                    "image": item.get("image", ""),
+                    "type": detail.get("type") or item.get("type", ""),
+                    "status": detail.get("status", ""),
+                    "genres": detail.get("genres") or item.get("genres", []),
+                    "color": item.get("color", False),
+                    "synopsis": item.get("synopsis", ""),
+                    "author": detail.get("author", ""),
+                    "alt_title": detail.get("alt_title", ""),
+                    "source": "komiku",
+                    "last_chapter": item["last_chapter"],
+                    "last_chapter_url": item.get("last_chapter_url", ""),
+                    "last_chapter_date": item.get("last_chapter_date", ""),
+                }
 
-    save_json(STATE_FILE, new_state)
+                komik_id = db_module.upsert_komik(conn, komik_data)
+                db_module.upsert_chapters(conn, komik_id, all_chapters)
 
-    # Save to SQLite
-    sys.path.insert(0, "/opt/services/shared")
-    from db import get_db, upsert_komik, upsert_chapters, log_scrape_run
+                if all_chapters:
+                    first = all_chapters[-1]
+                    db_module.update_komik_fully_scanned(
+                        conn, komik_id, len(all_chapters),
+                        first.get("text", ""), first.get("url", "")
+                    )
+
+                total_scanned += 1
+                batch_count += 1
+
+                if batch_count >= batch_size:
+                    conn.commit()
+                    batch_count = 0
+                    logger.info(f"  Batch committed: {total_scanned} komik scanned")
+
+                await asyncio.sleep(delay)
+
+            conn.commit()
+            db_module.update_komiku_scan_state(
+                conn, last_page=page, total_komik=total_scanned
+            )
+            conn.close()
+
+            if page % 10 == 0:
+                pct = round(page / 717 * 100, 1)
+                logger.info(f"📊 Full scan: {page}/717 pages ({pct}%) | {total_scanned} komik")
+
+    conn = db_module.get_db()
+    db_module.update_komiku_scan_state(
+        conn, status="done", last_page=717,
+        total_komik=total_scanned,
+        finished_at=datetime.now().isoformat()
+    )
+    conn.close()
+    logger.info(f"✅ Full scan complete! {total_scanned} komik scanned")
+
+
+# ── Update Tracker ───────────────────────────────────────────
+
+async def update_tracker(cfg: dict):
+    """
+    Check latest N pages for new chapters.
+    Only runs when full scan is not running.
+    """
+    conn = db_module.get_db()
+    state = db_module.get_komiku_scan_state(conn)
+    conn.close()
+
+    if state["status"] == "running":
+        logger.info("⏸ Update tracker skipped: full scan is running")
+        return
+
+    api_base = cfg["scraper"]["api_url"]
+    update_pages = cfg["scraper"].get("update_pages", 5)
+    delay = cfg["scraper"].get("update_delay", 1.0)
+    headers = {"User-Agent": cfg["scraper"]["user_agent"]}
+
+    logger.info(f"🔄 Update tracker: checking {update_pages} pages...")
 
     scrape_start = datetime.now().isoformat()
-    db = get_db()
-    try:
-        for komik in all_results:
-            ch = komik["chapters"][-1] if komik["chapters"] else {}
-            db_data = {
-                "title": komik["title"], "url": komik.get("url", ""),
-                "image": komik.get("image", ""), "type": komik.get("type", ""),
-                "status": komik.get("status", ""), "rating": komik.get("rating", ""),
-                "color": komik.get("color", False), "genres": komik.get("genres", []),
-                "author": "", "artist": "", "synopsis": komik.get("synopsis", ""),
-                "alt_title": "", "source": "komiku",
-                "last_chapter": ch.get("text", ""),
-                "last_chapter_url": ch.get("url", ""),
-                "last_chapter_date": komik.get("last_chapter_date", ""),
-            }
-            komik_id = upsert_komik(db, db_data)
-            upsert_chapters(db, komik_id, komik.get("chapters", []))
+    total_checked = 0
+    new_updates = 0
+    watchlist_hits = 0
 
-        duration = (datetime.now() - datetime.fromisoformat(scrape_start)).total_seconds()
-        log_scrape_run(db, "komiku", len(all_results), len(new_updates), len(watchlist_hits), duration, scrape_start)
-        db.commit()
-        logger.info(f"DB: saved {len(all_results)} komik")
-    except Exception as e:
-        logger.error(f"DB error: {e}")
-    finally:
-        db.close()
+    async with httpx.AsyncClient(headers=headers) as client:
+        conn = db_module.get_db()
+        try:
+            # Get bookmarks for watchlist check
+            bookmarked = set(db_module.get_bookmarked_komik_titles(conn))
+            config_watchlist = set(w.lower() for w in cfg.get("watchlist", []))
+            all_watchlist = bookmarked | config_watchlist
 
-    # Save latest.json
-    payload = {
-        "scraped_at": datetime.now().isoformat(),
-        "total": len(all_results),
-        "new_updates": len(new_updates),
-        "watchlist_hits": [k["title"] for k in watchlist_hits],
-        "data": all_results,
-    }
-    (output_dir / "latest.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+            for page in range(1, update_pages + 1):
+                url = api_base if page == 1 else f"{api_base}{page}/"
+                html = await fetch(client, url)
+                if not html:
+                    continue
 
-    logger.info(f"Done: {len(all_results)} komik | {len(new_updates)} new | {len(watchlist_hits)} watchlist")
+                komik_list = parse_listing_page(html)
+                for item in komik_list:
+                    total_checked += 1
+                    had_update = await process_komik_update(conn, client, item, cfg, delay)
+                    if had_update:
+                        new_updates += 1
+                        if item["title"].lower() in all_watchlist:
+                            watchlist_hits += 1
 
-    # Webhooks
-    if discord_url and watchlist_hits:
-        embeds = []
-        for k in watchlist_hits[:5]:
-            chs = k.get("chapters", [])
-            latest_ch = chs[-1] if chs else {}
-            genres = ", ".join(k.get("genres", [])[:5]) or "-"
-            author = k.get("author", "") or "-"
-            total_ch = len(chs)
+            duration = (datetime.now() - datetime.fromisoformat(scrape_start)).total_seconds()
+            db_module.log_scrape_run(conn, "komiku", total_checked, new_updates, watchlist_hits, duration, scrape_start)
+            conn.commit()
+            logger.info(f"✓ Update tracker done: {total_checked} checked, {new_updates} new, {watchlist_hits} watchlist")
 
-            ch_text = ""
-            for c in chs[-3:]:
-                ch_text += f"• [{c['text']}]({c['url']})"
-                if c.get("date"): ch_text += f" — _{c['date']}_"
-                ch_text += "\n"
+        except Exception as e:
+            logger.error(f"Update tracker error: {e}")
+        finally:
+            conn.close()
 
-            desc = f"**{k.get('type', '?')}** • {k.get('status', '?')}\n"
-            desc += f"✍️ {author}\n"
-            desc += f"🏷️ {genres}\n"
-            desc += f"📚 {total_ch} chapter total"
 
-            embed = {
-                "title": f"📖 {k['title']}",
-                "url": k.get("url", ""),
-                "description": desc,
-                "color": 0xFF6B35,
-                "footer": {"text": "Komiku Scraper • komiku.org"},
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-            if ch_text:
-                embed["fields"] = [{"name": "📋 Chapter Terbaru", "value": ch_text, "inline": False}]
-            if latest_ch:
-                embed.setdefault("fields", []).append({
-                    "name": "🆕 Update",
-                    "value": f"[{latest_ch.get('text', '?')}]({latest_ch.get('url', '')}) — {latest_ch.get('date', 'baru saja')}",
-                    "inline": False,
-                })
-            if k.get("image"):
-                embed["thumbnail"] = {"url": k["image"]}
-
-            embeds.append(embed)
-        await send_discord_webhook(discord_url, embeds)
-
-    return len(all_results)
-
+# ── Main ─────────────────────────────────────────────────────
 
 async def main():
-    logger.info("=" * 50)
-    logger.info("Komiku Scraper Started (komiku.org)")
-    logger.info(f"Watchlist: {config.get('watchlist', [])}")
-    logger.info("=" * 50)
+    cfg = load_config()
+    interval = cfg["scraper"].get("interval_minutes", 30)
 
-    interval = config["scraper"].get("interval_minutes", 30)
-    await run_scrape()
+    logger.info("=" * 60)
+    logger.info("🚀 Komiku Scraper v2 started")
+    logger.info(f"   API: {cfg['scraper']['api_url']}")
+    logger.info(f"   Update interval: {interval} minutes")
+    logger.info(f"   Notify mode: {cfg.get('webhook', {}).get('notify_mode', 'bookmark')}")
+    logger.info("=" * 60)
+
+    # Check if full scan was interrupted (status=running from previous run)
+    conn = db_module.get_db()
+    state = db_module.get_komiku_scan_state(conn)
+    conn.close()
+    if state["status"] == "running":
+        logger.info("🔄 Resuming interrupted full scan...")
+        await full_scan(cfg)
+
+    # Run update tracker immediately on startup
+    await update_tracker(cfg)
 
     while True:
-        logger.info(f"Next scrape in {interval} minutes...")
+        logger.info(f"⏰ Next check in {interval} minutes...")
         await asyncio.sleep(interval * 60)
-        await run_scrape()
+        cfg = load_config()
+
+        # Check if full scan was triggered via dashboard
+        conn = db_module.get_db()
+        state = db_module.get_komiku_scan_state(conn)
+        conn.close()
+
+        if state["status"] == "running":
+            logger.info("📚 Full scan triggered, starting...")
+            await full_scan(cfg)
+        else:
+            await update_tracker(cfg)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

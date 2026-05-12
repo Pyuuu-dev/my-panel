@@ -1,30 +1,30 @@
-cleanup:
-  keep_days: 1
-logging:
-  level: INFO
-output:
-  directory: /opt/services/komiku-scraper/output
 scraper:
-  api_url: https://api.komiku.org/manga/
-  base_url: https://komiku.org
-  delay: 3
-  detail_limit: 15
+  api_url: "https://api.komiku.org/manga/page/"
+  base_url: "https://komiku.org"
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+  # Full scan settings
+  full_scan_delay: 0.5
+  full_scan_batch_size: 50
+
+  # Update tracker settings
+  update_pages: 5
+  update_delay: 1.0
   interval_minutes: 30
-  max_pages: 3
+
+  # General
   max_retries: 3
   timeout: 30
-  user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
-    like Gecko) Chrome/120.0.0.0 Safari/537.36
-telegram:
-  bot_token: ''
-  chat_id: ''
-  enabled: false
-watchlist:
-- Magic Academy’s Genius Blinker
-- Became The Patron Of Villains
-- The Legendary Hero Is An Academy Honors Student
+
 webhook:
-  discord_url: https://discord.com/api/webhooks/1499934809420468436/ZJMgYWal_nqdk-gmH_Nzfvxh8fL6sFr_fh0GCwjuJFkFmJiQ8KcWNjfjjt0kdDogC_DP
   enabled: true
-  notify_on_scrape_done: false
-  notify_on_watchlist: true
+  discord_url: ""
+  notify_mode: "bookmark"  # "all" = semua update, "bookmark" = bookmark saja
+
+watchlist: []
+
+logging:
+  level: INFO
+
+output:
+  directory: /opt/services/komiku-scraper/output
