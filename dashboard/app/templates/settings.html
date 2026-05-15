@@ -1,28 +1,325 @@
 {% extends "base.html" %}{% block title %}Settings{% endblock %}
 {% block content %}
-<h2 class="text-lg sm:text-xl font-bold text-white mb-1">Account Settings</h2>
-<p class="text-gray-500 text-xs mb-6">Manage your account</p>
+
+<!-- Header -->
+<div class="mb-6 fade-in">
+  <div class="flex items-center gap-2 mb-2">
+    <i data-lucide="settings" class="w-4 h-4" style="color:var(--accent)"></i>
+    <span class="text-xs font-mono uppercase tracking-wider" style="color:var(--accent)">Account</span>
+  </div>
+  <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">Settings</h1>
+  <p class="text-sm mt-1" style="color:var(--text-secondary)">Manage your account & preferences</p>
+</div>
 
 {% if error is defined and error %}
-<div class="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">{{ error }}</div>
+<div class="mb-4 px-4 py-3 rounded-lg text-sm flex items-center gap-2" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#f87171">
+  <i data-lucide="alert-circle" class="w-4 h-4"></i>{{ error }}
+</div>
 {% endif %}
 {% if success is defined and success %}
-<div class="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400 text-sm">{{ success }}</div>
+<div class="mb-4 px-4 py-3 rounded-lg text-sm flex items-center gap-2" style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:#34d399">
+  <i data-lucide="check-circle" class="w-4 h-4"></i>{{ success }}
+</div>
 {% endif %}
 
-<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 max-w-md">
-<h3 class="text-sm font-medium text-white mb-4">Ganti Password</h3>
-<form method="POST" action="/settings/password" class="space-y-3">
-<div>
-<label class="block text-[10px] text-gray-400 mb-1">Password Lama</label>
-<input type="password" name="old_password" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
+
+<!-- Account info -->
+<div class="card p-5">
+  <div class="flex items-center gap-3 mb-4">
+    <div class="w-12 h-12 rounded-full flex items-center justify-center font-semibold text-lg" style="background:linear-gradient(135deg, var(--accent), #6366f1);color:#0a0f1a">
+      {{ user[0]|upper }}
+    </div>
+    <div>
+      <div class="text-sm font-semibold tracking-tight">{{ user }}</div>
+      <div class="text-[11px] font-mono" style="color:var(--text-muted)">SIGNED IN</div>
+    </div>
+  </div>
+  <div class="divider"></div>
+  <a href="/logout" class="btn btn-danger btn-sm w-full justify-center">
+    <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Logout
+  </a>
 </div>
-<div>
-<label class="block text-[10px] text-gray-400 mb-1">Password Baru</label>
-<input type="password" name="new_password" required minlength="4" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-<p class="text-[9px] text-gray-600 mt-1">Minimal 4 karakter</p>
+
+<!-- Change password -->
+<div class="card p-5">
+  <h3 class="text-sm font-semibold tracking-tight mb-4 flex items-center gap-2">
+    <i data-lucide="key" class="w-4 h-4" style="color:var(--accent)"></i>
+    Change Password
+  </h3>
+  <form method="POST" action="/settings/password" class="space-y-3">
+    <div>
+      <label class="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style="color:var(--text-secondary)">Current Password</label>
+      <input type="password" name="old_password" required class="input">
+    </div>
+    <div>
+      <label class="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style="color:var(--text-secondary)">New Password</label>
+      <input type="password" name="new_password" required minlength="4" class="input">
+      <p class="text-[10px] mt-1 font-mono" style="color:var(--text-muted)">Minimal 4 karakter</p>
+    </div>
+    <button type="submit" class="btn btn-primary w-full justify-center mt-2">
+      <i data-lucide="check" class="w-3.5 h-3.5"></i> Update Password
+    </button>
+  </form>
 </div>
-<button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg">Ubah Password</button>
-</form>
+
 </div>
+
+<!-- ── Telegram Backup ─────────────────────────────── -->
+{% set bk = bk_cfg|default({}) %}
+{% set tg_enabled = bk.get('tg_enabled', '0') == '1' %}
+{% set tg_compress = bk.get('tg_compress', '1') == '1' %}
+{% set tg_interval = bk.get('tg_interval', '24h') %}
+{% set tg_split_mode = bk.get('tg_split_mode', 'single') %}
+{% set tg_chunk_mb = bk.get('tg_chunk_mb', '45') %}
+{% set has_token = bk.get('tg_bot_token', '')|length > 0 %}
+{% set has_chat = bk.get('tg_chat_id', '')|length > 0 %}
+{% set last_run = bk.get('tg_last_run', '') %}
+
+<div class="mt-6 max-w-4xl">
+  <div class="card p-5">
+    <div class="flex items-center justify-between mb-1">
+      <div class="flex items-center gap-2">
+        <i data-lucide="cloud-upload" class="w-4 h-4" style="color:var(--accent)"></i>
+        <h3 class="text-sm font-semibold tracking-tight">Telegram Auto-Backup</h3>
+        {% if tg_enabled %}
+        <span class="badge badge-success"><i data-lucide="circle-check" class="w-3 h-3"></i> Active</span>
+        {% else %}
+        <span class="badge badge-muted">Disabled</span>
+        {% endif %}
+      </div>
+      <span class="text-[10px] font-mono" style="color:var(--text-muted)">DB: /opt/services/shared/app.db</span>
+    </div>
+    <p class="text-xs mb-4" style="color:var(--text-secondary)">Backup database otomatis ke Telegram bot. File akan di-gzip sebelum upload (default).</p>
+
+    <form id="tg-form" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style="color:var(--text-secondary)">Bot Token</label>
+        <input type="password" name="tg_bot_token" placeholder="{% if has_token %}•••••••••• (tersimpan){% else %}123456:ABC-DEF...{% endif %}" class="input">
+        <p class="text-[10px] mt-1 font-mono" style="color:var(--text-muted)">Dapat dari @BotFather. Kosongkan kalau tidak ingin ubah.</p>
+      </div>
+      <div>
+        <label class="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style="color:var(--text-secondary)">Chat ID</label>
+        <input type="text" name="tg_chat_id" placeholder="{% if has_chat %}{{ bk.get('tg_chat_id') }}{% else %}-1001234567890{% endif %}" class="input" value="{{ bk.get('tg_chat_id', '') }}">
+        <p class="text-[10px] mt-1 font-mono" style="color:var(--text-muted)">Group/channel/personal chat ID</p>
+      </div>
+
+      <div>
+        <label class="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style="color:var(--text-secondary)">Backup Interval</label>
+        <select name="tg_interval" class="input">
+          <option value="manual" {% if tg_interval == 'manual' %}selected{% endif %}>Manual only</option>
+          <option value="6h"     {% if tg_interval == '6h' %}selected{% endif %}>Setiap 6 jam</option>
+          <option value="12h"    {% if tg_interval == '12h' %}selected{% endif %}>Setiap 12 jam</option>
+          <option value="24h"    {% if tg_interval == '24h' %}selected{% endif %}>Setiap 24 jam (harian)</option>
+          <option value="7d"     {% if tg_interval == '7d' %}selected{% endif %}>Setiap 7 hari (mingguan)</option>
+        </select>
+      </div>
+      <div class="flex flex-col gap-3 justify-end pb-1">
+        <label class="flex items-center gap-2 cursor-pointer p-2 rounded-md hover:bg-[var(--bg-elevated)]">
+          <input type="checkbox" name="tg_enabled" {% if tg_enabled %}checked{% endif %} class="w-4 h-4 rounded" style="accent-color:var(--accent)">
+          <div>
+            <div class="text-sm font-medium">Enable auto-backup</div>
+            <div class="text-[10px]" style="color:var(--text-muted)">Scheduler berjalan di background dashboard</div>
+          </div>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer p-2 rounded-md hover:bg-[var(--bg-elevated)]">
+          <input type="checkbox" name="tg_compress" {% if tg_compress %}checked{% endif %} class="w-4 h-4 rounded" style="accent-color:var(--accent)">
+          <div>
+            <div class="text-sm font-medium">Gzip compression</div>
+            <div class="text-[10px]" style="color:var(--text-muted)">Wajib aktif kalau DB &gt; 50MB (limit Telegram)</div>
+          </div>
+        </label>
+      </div>
+
+      <!-- Split Mode (full row) -->
+      <div class="md:col-span-2 mt-2 p-3 rounded-lg" style="background:var(--bg-elevated);border:1px solid var(--border-subtle)">
+        <div class="flex items-center gap-2 mb-3">
+          <i data-lucide="split" class="w-4 h-4" style="color:var(--accent)"></i>
+          <h4 class="text-sm font-semibold tracking-tight">Split Mode (untuk DB besar)</h4>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style="color:var(--text-secondary)">Strategy</label>
+            <select name="tg_split_mode" id="tg_split_mode" class="input" onchange="onSplitModeChange()">
+              <option value="single" {% if tg_split_mode == 'single' %}selected{% endif %}>Single file (default)</option>
+              <option value="table"  {% if tg_split_mode == 'table' %}selected{% endif %}>Split per-table (B1)</option>
+              <option value="chunk"  {% if tg_split_mode == 'chunk' %}selected{% endif %}>Split binary chunk (B2)</option>
+            </select>
+          </div>
+          <div id="chunk-mb-wrap" {% if tg_split_mode != 'chunk' %}style="display:none"{% endif %}>
+            <label class="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style="color:var(--text-secondary)">Chunk Size (MB)</label>
+            <input type="number" name="tg_chunk_mb" min="5" max="45" value="{{ tg_chunk_mb }}" class="input">
+            <p class="text-[10px] mt-1 font-mono" style="color:var(--text-muted)">5-45 MB · default 45</p>
+          </div>
+        </div>
+        <div class="text-[11px] mt-3 leading-relaxed" style="color:var(--text-muted)">
+          <div id="hint-single" {% if tg_split_mode != 'single' %}style="display:none"{% endif %}>
+            <span class="font-mono" style="color:var(--accent)">single</span> · 1 file upload. Cocok untuk DB &lt; 50MB (setelah gzip). Restore: download → gunzip → ganti file.
+          </div>
+          <div id="hint-table" {% if tg_split_mode != 'table' %}style="display:none"{% endif %}>
+            <span class="font-mono" style="color:var(--accent)">table</span> · DB di-split per group: <code>core, komik, chapters, anime, fruityblox</code>. Setiap group jadi <code>.sql.gz</code> terpisah. Restore selektif (mis. cuma core+anime). Bagus kalau salah satu group kecil dan ingin update sering.
+          </div>
+          <div id="hint-chunk" {% if tg_split_mode != 'chunk' %}style="display:none"{% endif %}>
+            <span class="font-mono" style="color:var(--accent)">chunk</span> · Full DB → optional gzip → split binary jadi N file ≤ chunk size. Restore: <code>cat *.part&#42; &gt; restored.db.gz &amp;&amp; gunzip ...</code>. Sederhana, tapi semua part wajib lengkap.
+          </div>
+        </div>
+      </div>
+    </form>
+
+    <div class="flex flex-wrap gap-2 mt-5">
+      <button type="button" onclick="saveTgConfig()" class="btn btn-primary"><i data-lucide="save" class="w-3.5 h-3.5"></i> Save Config</button>
+      <button type="button" onclick="testTgConn()" class="btn btn-ghost"><i data-lucide="send" class="w-3.5 h-3.5"></i> Test Connection</button>
+      <button type="button" onclick="runBackup()" id="run-bk-btn" class="btn btn-ghost"><i data-lucide="upload-cloud" class="w-3.5 h-3.5"></i> Backup Now</button>
+      <span class="ml-auto text-[11px] font-mono self-center" style="color:var(--text-muted)">
+        {% if last_run %}Last: {{ last_run[:19].replace('T', ' ') }}{% else %}Belum pernah backup{% endif %}
+      </span>
+    </div>
+  </div>
+
+  <!-- Backup history -->
+  <div class="card p-5 mt-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        <i data-lucide="history" class="w-4 h-4" style="color:var(--accent)"></i>
+        <h3 class="text-sm font-semibold tracking-tight">Backup History</h3>
+      </div>
+      <button onclick="refreshHistory()" class="btn btn-ghost btn-sm"><i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i> Refresh</button>
+    </div>
+    <div id="bk-history">
+    {% if bk_log %}
+      <table class="w-full text-xs">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border-subtle)">
+            <th class="text-left py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Run At</th>
+            <th class="text-left py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Status</th>
+            <th class="text-right py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Size</th>
+            <th class="text-right py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Duration</th>
+            <th class="text-left py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Trigger</th>
+            <th class="text-left py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Note</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in bk_log %}
+          <tr style="border-bottom:1px solid var(--border-subtle)">
+            <td class="py-2 px-2 font-mono" style="color:var(--text-secondary)">{{ r.run_at[:19].replace('T', ' ') if r.run_at else '-' }}</td>
+            <td class="py-2 px-2"><span class="badge {% if r.status == 'success' %}badge-success{% else %}badge-danger{% endif %}">{{ r.status }}</span></td>
+            <td class="py-2 px-2 text-right font-mono">{{ '%.1f' % (r.size_bytes / 1024 / 1024) }} MB</td>
+            <td class="py-2 px-2 text-right font-mono" style="color:var(--text-muted)">{{ '%.1f' % r.duration_sec }}s</td>
+            <td class="py-2 px-2 text-[10px] font-mono uppercase" style="color:var(--text-muted)">{{ r.trigger }}</td>
+            <td class="py-2 px-2 text-[11px]" style="color:#f87171">{{ r.error_msg[:60] if r.error_msg else '' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="py-6 text-center text-xs" style="color:var(--text-muted)">Belum ada backup history</div>
+    {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+function onSplitModeChange(){
+  const mode = document.getElementById('tg_split_mode').value;
+  const chunkWrap = document.getElementById('chunk-mb-wrap');
+  if (chunkWrap) chunkWrap.style.display = (mode === 'chunk') ? '' : 'none';
+  ['single', 'table', 'chunk'].forEach(m => {
+    const el = document.getElementById('hint-' + m);
+    if (el) el.style.display = (m === mode) ? '' : 'none';
+  });
+}
+
+async function saveTgConfig(){
+  const form = document.getElementById('tg-form');
+  const fd = new FormData(form);
+  // Strip empty token so we don't overwrite stored value with blank
+  if (!fd.get('tg_bot_token') || !fd.get('tg_bot_token').trim()) fd.delete('tg_bot_token');
+  try {
+    const r = await fetch('/settings/telegram', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (d.ok) {
+      window.toast && window.toast(d.msg || 'Config saved', 'success');
+    } else {
+      window.toast && window.toast(d.error || 'Gagal save', 'error');
+    }
+  } catch (e) {
+    window.toast && window.toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function testTgConn(){
+  try {
+    const r = await fetch('/api/backup/test-tg', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      window.toast && window.toast(d.msg || 'Test sent', 'success');
+    } else {
+      window.toast && window.toast('Error: ' + (d.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    window.toast && window.toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function runBackup(){
+  const btn = document.getElementById('run-bk-btn');
+  if (!confirm('Jalankan backup sekarang? Database akan di-VACUUM lalu di-upload ke Telegram.')) return;
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i> Running...';
+  if (window.lucide) lucide.createIcons();
+  try {
+    const r = await fetch('/api/backup/run', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      window.toast && window.toast(`Backup berhasil! ${d.size_human} dalam ${d.duration_sec}s`, 'success');
+      setTimeout(refreshHistory, 800);
+    } else if (d.status === 'skipped') {
+      window.toast && window.toast('Backup dilewati: ' + d.reason, 'warning');
+    } else {
+      window.toast && window.toast('Backup gagal: ' + (d.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    window.toast && window.toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+    if (window.lucide) lucide.createIcons();
+  }
+}
+
+async function refreshHistory(){
+  try {
+    const r = await fetch('/api/backup/history');
+    const d = await r.json();
+    const wrap = document.getElementById('bk-history');
+    if (!d.runs || !d.runs.length) {
+      wrap.innerHTML = '<div class="py-6 text-center text-xs" style="color:var(--text-muted)">Belum ada backup history</div>';
+      return;
+    }
+    const head = `<table class="w-full text-xs">
+      <thead><tr style="border-bottom:1px solid var(--border-subtle)">
+        <th class="text-left py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Run At</th>
+        <th class="text-left py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Status</th>
+        <th class="text-right py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Size</th>
+        <th class="text-right py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Duration</th>
+        <th class="text-left py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Trigger</th>
+        <th class="text-left py-2 px-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Note</th>
+      </tr></thead><tbody>`;
+    const body = d.runs.map(r => `
+      <tr style="border-bottom:1px solid var(--border-subtle)">
+        <td class="py-2 px-2 font-mono" style="color:var(--text-secondary)">${(r.run_at || '').slice(0,19).replace('T',' ')}</td>
+        <td class="py-2 px-2"><span class="badge ${r.status === 'success' ? 'badge-success' : 'badge-danger'}">${r.status}</span></td>
+        <td class="py-2 px-2 text-right font-mono">${(r.size_bytes / 1024 / 1024).toFixed(1)} MB</td>
+        <td class="py-2 px-2 text-right font-mono" style="color:var(--text-muted)">${r.duration_sec.toFixed(1)}s</td>
+        <td class="py-2 px-2 text-[10px] font-mono uppercase" style="color:var(--text-muted)">${r.trigger}</td>
+        <td class="py-2 px-2 text-[11px]" style="color:#f87171">${(r.error_msg || '').slice(0,60)}</td>
+      </tr>
+    `).join('');
+    wrap.innerHTML = head + body + '</tbody></table>';
+  } catch (e) {
+    console.error('refreshHistory:', e);
+  }
+}
+</script>
 {% endblock %}

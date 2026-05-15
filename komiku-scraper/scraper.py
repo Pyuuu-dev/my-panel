@@ -536,21 +536,41 @@ async def main():
     # Run update tracker immediately on startup
     await update_tracker(cfg)
 
+    # Main loop with exponential backoff on consecutive failures
+    BACKOFF_SCHEDULE = [60, 120, 240]
+    fail_count = 0
     while True:
-        logger.info(f"⏰ Next check in {interval} minutes...")
-        await asyncio.sleep(interval * 60)
-        cfg = load_config()
+        try:
+            logger.info(f"⏰ Next check in {interval} minutes...")
+            await asyncio.sleep(interval * 60)
+            cfg = load_config()
+            interval = cfg["scraper"].get("interval_minutes", 30)
 
-        # Check if full scan was triggered via dashboard
-        conn = db_module.get_db()
-        state = db_module.get_komiku_scan_state(conn)
-        conn.close()
+            # Check if full scan was triggered via dashboard
+            conn = db_module.get_db()
+            state = db_module.get_komiku_scan_state(conn)
+            conn.close()
 
-        if state["status"] == "running":
-            logger.info("📚 Full scan triggered, starting...")
-            await full_scan(cfg)
-        else:
-            await update_tracker(cfg)
+            if state["status"] == "running":
+                logger.info("📚 Full scan triggered, starting...")
+                await full_scan(cfg)
+            else:
+                await update_tracker(cfg)
+
+            if fail_count > 0:
+                logger.info(f"✓ Recovered after {fail_count} retry attempt(s)")
+            fail_count = 0
+        except Exception as e:
+            logger.error(f"Loop error: {e}", exc_info=True)
+            if fail_count < len(BACKOFF_SCHEDULE):
+                wait_s = BACKOFF_SCHEDULE[fail_count]
+                fail_count += 1
+                logger.warning(f"⚠ Retry {fail_count}/{len(BACKOFF_SCHEDULE)} in {wait_s}s (exponential backoff)")
+                await asyncio.sleep(wait_s)
+            else:
+                fail_count = 0
+                logger.error("✗ Max retries reached, will continue normal cycle")
+                # next iteration's sleep(interval*60) acts as cooldown
 
 
 if __name__ == "__main__":

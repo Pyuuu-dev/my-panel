@@ -2,10 +2,16 @@
 Full SQLite, bookmarks, read tracker, history, password change, rate limiting.
 Server monitoring, cache management, VPS optimization.
 """
+import asyncio
+import gzip
 import json
+import logging
 import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import psutil
 import time as _time
 import xmlrpc.client
@@ -62,10 +68,20 @@ SERVICES = {
 
 # ── Rate Limiter ────────────────────────────────────────
 _rate_store: dict[str, list[float]] = defaultdict(list)
+_rate_last_cleanup: float = 0.0
 
 def check_rate_limit(ip: str, limit: int = 60, window: int = 60) -> bool:
     """Returns True if request is allowed."""
+    global _rate_last_cleanup
     now = _time.time()
+    # Periodic cleanup of dead IPs (every 10 minutes)
+    if now - _rate_last_cleanup > 600:
+        cutoff = now - window * 2
+        for k in list(_rate_store.keys()):
+            _rate_store[k] = [t for t in _rate_store[k] if t > cutoff]
+            if not _rate_store[k]:
+                del _rate_store[k]
+        _rate_last_cleanup = now
     _rate_store[ip] = [t for t in _rate_store[ip] if now - t < window]
     if len(_rate_store[ip]) >= limit:
         return False
@@ -73,19 +89,33 @@ def check_rate_limit(ip: str, limit: int = 60, window: int = 60) -> bool:
     return True
 
 # ── Supervisor ──────────────────────────────────────────
-def sup():
-    return xmlrpc.client.ServerProxy(SUPERVISOR_URL)
+_supervisor_proxy = None
+_services_cache: dict = {"data": None, "ts": 0.0}
+_SERVICES_CACHE_TTL = 5.0  # seconds
 
-def get_all_services() -> list[dict]:
+def sup():
+    """Reuse a single XML-RPC proxy across calls."""
+    global _supervisor_proxy
+    if _supervisor_proxy is None:
+        _supervisor_proxy = xmlrpc.client.ServerProxy(SUPERVISOR_URL)
+    return _supervisor_proxy
+
+def get_all_services(use_cache: bool = True) -> list[dict]:
+    now = _time.time()
+    if use_cache and _services_cache["data"] is not None and now - _services_cache["ts"] < _SERVICES_CACHE_TTL:
+        return _services_cache["data"]
     result = []
+    s = sup()
     for slug, meta in SERVICES.items():
         try:
-            p = sup().supervisor.getProcessInfo(slug)
+            p = s.supervisor.getProcessInfo(slug)
             state, pid = p["statename"], p["pid"]
             uptime = p["description"] if state == "RUNNING" else ""
         except Exception:
             state, pid, uptime = "UNKNOWN", 0, ""
         result.append({"slug": slug, **meta, "state": state, "pid": pid, "uptime": uptime})
+    _services_cache["data"] = result
+    _services_cache["ts"] = now
     return result
 
 def svc_do(slug: str, action: str) -> tuple[bool, str]:
@@ -100,11 +130,13 @@ def svc_do(slug: str, action: str) -> tuple[bool, str]:
             except Exception: pass
             _time.sleep(0.5)
             s.supervisor.startProcess(slug)
+        # Invalidate cache so next page load reflects new state
+        _services_cache["data"] = None
         # Log uptime event
         try:
-            db = get_db()
-            log_uptime(db, slug, action)
-            db.close()
+            d = get_db()
+            log_uptime(d, slug, action)
+            d.close()
         except Exception: pass
         return True, f"{slug} {action}ed."
     except xmlrpc.client.Fault as e:
@@ -116,20 +148,56 @@ def svc_do(slug: str, action: str) -> tuple[bool, str]:
         return False, f"Error: {e}"
 
 # ── Helpers ─────────────────────────────────────────────
+# Background CPU sampler — avoids blocking the event loop with psutil.cpu_percent(interval=0.3)
+_cpu_last_sample: float = 0.0
+
+def _get_cpu_pct() -> float:
+    """Non-blocking CPU sample. First call returns 0.0; subsequent return delta since last call."""
+    global _cpu_last_sample
+    val = psutil.cpu_percent(interval=None)
+    _cpu_last_sample = val
+    return val
+
+# Prime psutil so first call has a baseline
+psutil.cpu_percent(interval=None)
+
 def sys_stats() -> dict:
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     return {
-        "cpu": psutil.cpu_percent(interval=0.3),
+        "cpu": _get_cpu_pct(),
         "mem_used": round(mem.used/1024**3, 2), "mem_total": round(mem.total/1024**3, 2), "mem_pct": mem.percent,
         "disk_used": round(disk.used/1024**3, 1), "disk_total": round(disk.total/1024**3, 1), "disk_pct": round(disk.percent, 1),
     }
 
 def read_log(name: str, lines: int = 200) -> str:
+    """Read last N lines of a log file efficiently using reverse seek.
+
+    Avoids loading the entire file into memory. Reads ~8KB chunks from the end
+    until enough newlines are found.
+    """
     f = LOGS_DIR / f"{name}.log"
-    if not f.exists(): return "(no log file yet)"
-    try: return "\n".join(f.read_text().splitlines()[-lines:])
-    except Exception as e: return f"Error: {e}"
+    if not f.exists():
+        return "(no log file yet)"
+    try:
+        size = f.stat().st_size
+        if size == 0:
+            return ""
+        chunk_size = 8192
+        data = b""
+        with f.open("rb") as fh:
+            pos = size
+            newlines_needed = lines + 1
+            while pos > 0 and data.count(b"\n") < newlines_needed:
+                read_size = min(chunk_size, pos)
+                pos -= read_size
+                fh.seek(pos)
+                data = fh.read(read_size) + data
+        text = data.decode("utf-8", errors="replace")
+        result_lines = text.splitlines()[-lines:]
+        return "\n".join(result_lines)
+    except Exception as e:
+        return f"Error: {e}"
 
 def get_latest(slug: str) -> dict | None:
     m = SERVICES.get(slug)
@@ -163,6 +231,30 @@ def get_user(r: Request) -> str | None:
     if not t: return None
     try: return jwt.decode(t, SECRET_KEY, algorithms=["HS256"]).get("sub")
     except JWTError: return None
+
+_CH_NUM_RE = re.compile(r'(\d+(?:\.\d+)?)')
+
+def parse_chapter_num(text: str, number: str = "") -> tuple[float, int]:
+    """Extract sortable numeric value from chapter text/number.
+
+    Returns (primary, secondary) tuple where primary is the parsed float
+    and secondary is whether 'fix'/'extra' marker exists (later in sort).
+    Falls back to 0.0 if no number found.
+    """
+    src = (number or "").strip().lstrip('-').strip()
+    if not src or src == '-':
+        src = text or ""
+    m = _CH_NUM_RE.search(src)
+    if not m:
+        return (0.0, 0)
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        val = 0.0
+    # Penalty for "fix"/"extra"/"omake" so they don't displace canonical numbering
+    suffix_marker = 1 if re.search(r'\b(fix|extra|omake|special)\b', text or "", re.IGNORECASE) else 0
+    return (val, suffix_marker)
+
 
 def parse_log_entries(raw: str) -> list[dict]:
     entries = []
@@ -202,6 +294,454 @@ def auto_cleanup(slug: str, keep_days: int = 7):
             f.unlink(); removed += 1
     return removed
 
+# ── Telegram Backup ─────────────────────────────────────
+_backup_lock = asyncio.Lock()
+_BACKUP_INTERVALS = {  # interval label -> seconds
+    "manual": None,
+    "6h":   6 * 3600,
+    "12h": 12 * 3600,
+    "24h": 24 * 3600,
+    "7d":   7 * 24 * 3600,
+}
+
+def _bytes_human(n: int) -> str:
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {u}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+async def tg_send_message(token: str, chat_id: str, text: str, timeout: float = 10.0) -> dict:
+    """Send a plain text message via Telegram bot API."""
+    import httpx as _httpx
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    async with _httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
+        return r.json()
+
+async def tg_send_document(token: str, chat_id: str, file_path: Path, caption: str = "", timeout: float = 120.0) -> dict:
+    """Upload a document via Telegram bot API. Returns response JSON."""
+    import httpx as _httpx
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    async with _httpx.AsyncClient(timeout=timeout) as client:
+        with file_path.open("rb") as f:
+            files = {"document": (file_path.name, f, "application/octet-stream")}
+            data = {"chat_id": chat_id, "caption": caption}
+            r = await client.post(url, data=data, files=files)
+            return r.json()
+
+async def tg_backup_now(trigger: str = "manual") -> dict:
+    """Run a Telegram backup of /opt/services/shared/app.db.
+
+    Dispatches to one of three modes based on `tg_split_mode` setting:
+    - 'single' (default): full DB → optional gzip → 1 file upload
+    - 'table' (B1):       VACUUM full → split per-table SQL dumps → gzip each → upload N files
+    - 'chunk' (B2):       VACUUM full → optional gzip → split binary into N parts ≤ chunk_size
+
+    Returns dict with status info.
+    """
+    if _backup_lock.locked():
+        return {"status": "skipped", "reason": "another backup is running"}
+    async with _backup_lock:
+        start_ts = _time.time()
+        d = get_db()
+        try:
+            cfg = db.get_all_settings(d, prefix="tg_")
+            token = cfg.get("tg_bot_token", "").strip()
+            chat_id = cfg.get("tg_chat_id", "").strip()
+            compress = cfg.get("tg_compress", "1") == "1"
+            split_mode = cfg.get("tg_split_mode", "single")
+            try:
+                chunk_mb = max(5, min(45, int(cfg.get("tg_chunk_mb", "45"))))
+            except ValueError:
+                chunk_mb = 45
+            if not token or not chat_id:
+                msg = "Telegram bot_token / chat_id belum dikonfigurasi"
+                db.log_backup_run(d, "error", error_msg=msg, trigger=trigger)
+                return {"status": "error", "error": msg}
+        finally:
+            d.close()
+
+        try:
+            if split_mode == "table":
+                result = await _tg_backup_split_table(token, chat_id, trigger, compress, start_ts)
+            elif split_mode == "chunk":
+                result = await _tg_backup_split_chunk(token, chat_id, trigger, compress, chunk_mb, start_ts)
+            else:
+                result = await _tg_backup_single(token, chat_id, trigger, compress, start_ts)
+            return result
+        except Exception as e:
+            duration = _time.time() - start_ts
+            err = str(e)[:200]
+            d2 = get_db()
+            try:
+                db.log_backup_run(d2, "error", duration_sec=duration, error_msg=err, trigger=trigger)
+            finally:
+                d2.close()
+            return {"status": "error", "error": err}
+
+
+# ── Single-file backup (default) ────────────────────────
+async def _tg_backup_single(token: str, chat_id: str, trigger: str,
+                            compress: bool, start_ts: float) -> dict:
+    """Original single-file backup: VACUUM → optional gzip → 1 upload."""
+    tmp_dir = Path(tempfile.gettempdir())
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dump_path = tmp_dir / f"app_backup_{ts}.db"
+    upload_path = dump_path
+    try:
+        # VACUUM INTO snapshot
+        import sqlite3
+        src = sqlite3.connect(str(db.DB_PATH))
+        try:
+            src.execute(f"VACUUM INTO '{dump_path}'")
+            src.commit()
+        finally:
+            src.close()
+
+        if compress:
+            gz_path = dump_path.with_suffix(".db.gz")
+            with dump_path.open("rb") as fin, gzip.open(gz_path, "wb", compresslevel=6) as fout:
+                shutil.copyfileobj(fin, fout, length=1024 * 1024)
+            dump_path.unlink(missing_ok=True)
+            upload_path = gz_path
+
+        size = upload_path.stat().st_size
+        if size > 50 * 1024 * 1024:
+            msg = (f"File {_bytes_human(size)} > 50MB Telegram limit. "
+                   f"Pilih split mode (table/chunk) di Settings atau aktifkan compression.")
+            d2 = get_db()
+            try:
+                db.log_backup_run(d2, "error", size_bytes=size,
+                                  duration_sec=_time.time() - start_ts,
+                                  error_msg=msg, trigger=trigger)
+            finally:
+                d2.close()
+            return {"status": "error", "error": msg}
+
+        caption = (
+            f"💾 Service Manager Backup\n"
+            f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"📦 {_bytes_human(size)} · trigger: {trigger} · mode: single"
+        )
+        resp = await tg_send_document(token, chat_id, upload_path, caption=caption)
+        if not resp.get("ok"):
+            err = resp.get("description", "unknown error")
+            d2 = get_db()
+            try:
+                db.log_backup_run(d2, "error", size_bytes=size,
+                                  duration_sec=_time.time() - start_ts,
+                                  error_msg=err, trigger=trigger)
+            finally:
+                d2.close()
+            return {"status": "error", "error": err}
+
+        duration = _time.time() - start_ts
+        d2 = get_db()
+        try:
+            db.log_backup_run(d2, "success", size_bytes=size,
+                              duration_sec=duration, trigger=trigger)
+            db.set_setting(d2, "tg_last_run", datetime.now().isoformat())
+            d2.commit()
+        finally:
+            d2.close()
+        return {"status": "success", "size_bytes": size,
+                "duration_sec": round(duration, 2), "size_human": _bytes_human(size),
+                "mode": "single", "parts": 1}
+    finally:
+        try:
+            if dump_path.exists(): dump_path.unlink()
+        except Exception: pass
+        try:
+            if upload_path != dump_path and upload_path.exists(): upload_path.unlink()
+        except Exception: pass
+
+
+# ── B1: Split per table ─────────────────────────────────
+# Group tables into buckets — small/metadata together, large content separate.
+_TABLE_GROUPS = {
+    "core":       ["users", "app_settings", "bookmarks", "anime_bookmarks",
+                   "read_status", "anime_watch_status", "uptime_log",
+                   "scrape_runs", "backup_log"],
+    "komik":      ["komik", "komiku_scan_state"],
+    "chapters":   ["chapters"],
+    "anime":      ["anime", "anime_episodes"],
+    "fruityblox": ["fruityblox_stock", "fruityblox_rotations",
+                   "fruityblox_config", "fruityblox_scrape_runs"],
+}
+
+async def _tg_backup_split_table(token: str, chat_id: str, trigger: str,
+                                 compress: bool, start_ts: float) -> dict:
+    """Backup per-group SQL dumps. Each group becomes a separate .sql.gz file.
+
+    Restore: download all files, run `sqlite3 new.db < <(zcat *.sql.gz)`
+    or per-table import.
+    """
+    import sqlite3
+    tmp_dir = Path(tempfile.gettempdir())
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    snapshot = tmp_dir / f"app_snapshot_{ts}.db"
+    artifacts: list[Path] = []
+    total_size = 0
+
+    try:
+        # 1. Take consistent snapshot via VACUUM INTO
+        src = sqlite3.connect(str(db.DB_PATH))
+        try:
+            src.execute(f"VACUUM INTO '{snapshot}'")
+            src.commit()
+        finally:
+            src.close()
+
+        # 2. For each group, dump its tables as SQL and write file
+        snap_conn = sqlite3.connect(str(snapshot))
+        try:
+            existing_tables = {
+                r[0] for r in snap_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            for group, tbls in _TABLE_GROUPS.items():
+                tbls_in_snap = [t for t in tbls if t in existing_tables]
+                if not tbls_in_snap:
+                    continue
+                ext = ".sql.gz" if compress else ".sql"
+                out_path = tmp_dir / f"app_backup_{ts}_{group}{ext}"
+                opener = (lambda p: gzip.open(p, "wt", encoding="utf-8", compresslevel=6)) if compress else (lambda p: open(p, "w", encoding="utf-8"))
+                with opener(out_path) as f:
+                    f.write("PRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\n")
+                    # Use iterdump filtered by tables
+                    for line in snap_conn.iterdump():
+                        # iterdump emits CREATE TABLE / CREATE INDEX / INSERT — keep only those
+                        # whose target name is in this group's tables
+                        keep = False
+                        upper = line.lstrip().upper()
+                        for t in tbls_in_snap:
+                            if (f'TABLE "{t}"' in line or f'TABLE {t}' in line or
+                                f'INTO "{t}"' in line or f'INTO {t}' in line or
+                                f'INDEX' in upper and f'ON {t}' in line):
+                                keep = True
+                                break
+                        if keep:
+                            f.write(line + "\n")
+                    f.write("COMMIT;\n")
+                artifacts.append(out_path)
+        finally:
+            snap_conn.close()
+
+        if not artifacts:
+            return {"status": "error", "error": "Tidak ada table untuk di-backup"}
+
+        # 3. Upload each artifact sequentially with [n/N] caption
+        total_n = len(artifacts)
+        for idx, art in enumerate(artifacts, 1):
+            sz = art.stat().st_size
+            if sz > 50 * 1024 * 1024:
+                msg = f"Part {idx}/{total_n} ({art.name}) {_bytes_human(sz)} > 50MB. Tabel terlalu besar untuk single file — gunakan mode chunk."
+                d2 = get_db()
+                try:
+                    db.log_backup_run(d2, "error", size_bytes=total_size,
+                                      duration_sec=_time.time() - start_ts,
+                                      error_msg=msg, trigger=trigger)
+                finally:
+                    d2.close()
+                return {"status": "error", "error": msg}
+            total_size += sz
+            caption = (
+                f"💾 Backup [{idx}/{total_n}] {art.stem.split('_')[-1]}\n"
+                f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"📦 {_bytes_human(sz)} · trigger: {trigger} · mode: table"
+            )
+            resp = await tg_send_document(token, chat_id, art, caption=caption)
+            if not resp.get("ok"):
+                err = f"part {idx}/{total_n}: {resp.get('description','unknown')}"
+                d2 = get_db()
+                try:
+                    db.log_backup_run(d2, "error", size_bytes=total_size,
+                                      duration_sec=_time.time() - start_ts,
+                                      error_msg=err, trigger=trigger)
+                finally:
+                    d2.close()
+                return {"status": "error", "error": err}
+
+        duration = _time.time() - start_ts
+        d2 = get_db()
+        try:
+            db.log_backup_run(d2, "success", size_bytes=total_size,
+                              duration_sec=duration, trigger=trigger)
+            db.set_setting(d2, "tg_last_run", datetime.now().isoformat())
+            d2.commit()
+        finally:
+            d2.close()
+        return {"status": "success", "size_bytes": total_size,
+                "duration_sec": round(duration, 2),
+                "size_human": _bytes_human(total_size),
+                "mode": "table", "parts": total_n}
+
+    finally:
+        # Cleanup
+        try:
+            if snapshot.exists(): snapshot.unlink()
+        except Exception: pass
+        for a in artifacts:
+            try:
+                if a.exists(): a.unlink()
+            except Exception: pass
+
+
+# ── B2: Split binary chunk ──────────────────────────────
+async def _tg_backup_split_chunk(token: str, chat_id: str, trigger: str,
+                                 compress: bool, chunk_mb: int,
+                                 start_ts: float) -> dict:
+    """Backup full DB then split into binary chunks of `chunk_mb` MB.
+
+    Restore (manual):
+        cat app_backup_*.part* > restored.db.gz
+        gunzip restored.db.gz
+        # → restored.db
+    """
+    import sqlite3
+    tmp_dir = Path(tempfile.gettempdir())
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    snapshot = tmp_dir / f"app_snapshot_{ts}.db"
+    full_path = snapshot
+    parts: list[Path] = []
+    total_size = 0
+
+    try:
+        # 1. VACUUM INTO snapshot
+        src = sqlite3.connect(str(db.DB_PATH))
+        try:
+            src.execute(f"VACUUM INTO '{snapshot}'")
+            src.commit()
+        finally:
+            src.close()
+
+        # 2. Optional gzip first
+        if compress:
+            gz_path = snapshot.with_suffix(".db.gz")
+            with snapshot.open("rb") as fin, gzip.open(gz_path, "wb", compresslevel=6) as fout:
+                shutil.copyfileobj(fin, fout, length=1024 * 1024)
+            snapshot.unlink(missing_ok=True)
+            full_path = gz_path
+
+        full_size = full_path.stat().st_size
+        chunk_bytes = chunk_mb * 1024 * 1024
+        base_name = full_path.name  # e.g. app_snapshot_20261231_120000.db.gz
+
+        # 3. Split into N parts
+        part_idx = 0
+        with full_path.open("rb") as fin:
+            while True:
+                data = fin.read(chunk_bytes)
+                if not data:
+                    break
+                part_idx += 1
+                part_path = tmp_dir / f"{base_name}.part{part_idx:03d}"
+                part_path.write_bytes(data)
+                parts.append(part_path)
+
+        if not parts:
+            return {"status": "error", "error": "Backup file kosong"}
+
+        # 4. Upload each part
+        total_n = len(parts)
+        for idx, part in enumerate(parts, 1):
+            sz = part.stat().st_size
+            if sz > 50 * 1024 * 1024:
+                msg = f"Part {idx} {_bytes_human(sz)} > 50MB. Turunkan chunk_mb."
+                d2 = get_db()
+                try:
+                    db.log_backup_run(d2, "error", size_bytes=total_size,
+                                      duration_sec=_time.time() - start_ts,
+                                      error_msg=msg, trigger=trigger)
+                finally:
+                    d2.close()
+                return {"status": "error", "error": msg}
+            total_size += sz
+            caption = (
+                f"💾 Backup chunk [{idx}/{total_n}]\n"
+                f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"📦 {_bytes_human(sz)} · trigger: {trigger} · mode: chunk\n"
+                f"♻️ Restore: cat *.part* > {base_name} && {'gunzip' if compress else 'mv'} {base_name}"
+            )
+            resp = await tg_send_document(token, chat_id, part, caption=caption)
+            if not resp.get("ok"):
+                err = f"part {idx}/{total_n}: {resp.get('description','unknown')}"
+                d2 = get_db()
+                try:
+                    db.log_backup_run(d2, "error", size_bytes=total_size,
+                                      duration_sec=_time.time() - start_ts,
+                                      error_msg=err, trigger=trigger)
+                finally:
+                    d2.close()
+                return {"status": "error", "error": err}
+
+        duration = _time.time() - start_ts
+        d2 = get_db()
+        try:
+            db.log_backup_run(d2, "success", size_bytes=total_size,
+                              duration_sec=duration, trigger=trigger)
+            db.set_setting(d2, "tg_last_run", datetime.now().isoformat())
+            d2.commit()
+        finally:
+            d2.close()
+        return {"status": "success", "size_bytes": total_size,
+                "duration_sec": round(duration, 2),
+                "size_human": _bytes_human(total_size),
+                "mode": "chunk", "parts": total_n}
+
+    finally:
+        try:
+            if snapshot.exists(): snapshot.unlink()
+        except Exception: pass
+        try:
+            if full_path != snapshot and full_path.exists(): full_path.unlink()
+        except Exception: pass
+        for p in parts:
+            try:
+                if p.exists(): p.unlink()
+            except Exception: pass
+
+
+def _backup_should_run() -> bool:
+    """Decide if auto-backup is due based on settings."""
+    d = get_db()
+    try:
+        cfg = db.get_all_settings(d, prefix="tg_")
+    finally:
+        d.close()
+    if cfg.get("tg_enabled", "0") != "1":
+        return False
+    interval_key = cfg.get("tg_interval", "24h")
+    interval_sec = _BACKUP_INTERVALS.get(interval_key)
+    if not interval_sec:
+        return False
+    last_run_iso = cfg.get("tg_last_run", "")
+    if not last_run_iso:
+        return True
+    try:
+        last = datetime.fromisoformat(last_run_iso)
+    except Exception:
+        return True
+    return (datetime.now() - last).total_seconds() >= interval_sec
+
+
+async def backup_scheduler_loop():
+    """Background loop that checks every 5 minutes if a backup is due."""
+    # Wait a bit on startup so we don't collide with init
+    await asyncio.sleep(60)
+    while True:
+        try:
+            if _backup_should_run():
+                print(f"[BackupScheduler] Auto-backup triggered")
+                result = await tg_backup_now(trigger="auto")
+                print(f"[BackupScheduler] Result: {result.get('status')}")
+        except Exception as e:
+            print(f"[BackupScheduler] Error: {e}")
+        await asyncio.sleep(300)  # check every 5 min
+
+
 # ── App ─────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -210,7 +750,16 @@ async def lifespan(app: FastAPI):
         cfg = load_svc_config(slug)
         n = auto_cleanup(slug, cfg.get("cleanup", {}).get("keep_days", 7))
         if n: print(f"[Cleanup] {slug}: removed {n} old files")
-    yield
+    # Start background backup scheduler
+    backup_task = asyncio.create_task(backup_scheduler_loop())
+    try:
+        yield
+    finally:
+        backup_task.cancel()
+        try:
+            await backup_task
+        except asyncio.CancelledError:
+            pass
 
 app = FastAPI(title="Service Manager", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -489,17 +1038,29 @@ async def api_bookmark(request: Request, action: str):
     user = get_user(request)
     if not user: return JSONResponse({"error": "unauthorized"}, 401)
     form = await request.form()
-    title = form.get("title", "")
-    if not title: return JSONResponse({"error": "title required"}, 400)
+    title = (form.get("title") or "").strip()
+    komik_id_str = (form.get("komik_id") or "").strip()
+    if not title and not komik_id_str:
+        return JSONResponse({"error": "title or komik_id required"}, 400)
 
     db = get_db()
     try:
-        komik = db.execute("SELECT id FROM komik WHERE title=?", (title,)).fetchone()
-        if not komik:
-            # Create komik entry if not exists
-            db.execute("INSERT INTO komik (title) VALUES (?)", (title,))
-            db.commit()
+        komik = None
+        if komik_id_str:
+            try:
+                kid = int(komik_id_str)
+                komik = db.execute("SELECT id FROM komik WHERE id=?", (kid,)).fetchone()
+            except ValueError:
+                pass
+        if not komik and title:
             komik = db.execute("SELECT id FROM komik WHERE title=?", (title,)).fetchone()
+            if not komik:
+                # Create minimal komik entry only when adding by title
+                db.execute("INSERT INTO komik (title) VALUES (?)", (title,))
+                db.commit()
+                komik = db.execute("SELECT id FROM komik WHERE title=?", (title,)).fetchone()
+        if not komik:
+            return JSONResponse({"error": "komik not found"}, 404)
 
         kid = komik["id"]
         if action == "add":
@@ -508,7 +1069,7 @@ async def api_bookmark(request: Request, action: str):
             db.execute("DELETE FROM bookmarks WHERE komik_id=?", (kid,))
         db.commit()
         is_bookmarked = db.execute("SELECT id FROM bookmarks WHERE komik_id=?", (kid,)).fetchone() is not None
-        return JSONResponse({"ok": True, "bookmarked": is_bookmarked})
+        return JSONResponse({"ok": True, "bookmarked": is_bookmarked, "komik_id": kid})
     finally:
         db.close()
 
@@ -537,36 +1098,142 @@ async def api_mark_read(request: Request):
 async def settings_page(request: Request):
     user = get_user(request)
     if not user: return RedirectResponse("/login", 302)
+    d = get_db()
+    try:
+        bk_cfg = db.get_all_settings(d, prefix="tg_")
+        bk_log = db.get_backup_log(d, limit=8)
+    finally:
+        d.close()
     return tpl.TemplateResponse(request, "settings.html", context={
         "user": user, "page": "settings", "services": get_all_services(),
+        "bk_cfg": bk_cfg, "bk_log": bk_log,
     })
 
 @app.post("/settings/password")
 async def change_password(request: Request, old_password: str = Form(...), new_password: str = Form(...)):
     user = get_user(request)
     if not user: return RedirectResponse("/login", 302)
-    db = get_db()
+    d = get_db()
     try:
-        row = db.execute("SELECT password FROM users WHERE username=?", (user,)).fetchone()
+        row = d.execute("SELECT password FROM users WHERE username=?", (user,)).fetchone()
+        bk_cfg = db.get_all_settings(d, prefix="tg_")
+        bk_log = db.get_backup_log(d, limit=8)
         if not row or not bcrypt.checkpw(old_password.encode(), row["password"].encode()):
             return tpl.TemplateResponse(request, "settings.html", context={
                 "user": user, "page": "settings", "services": get_all_services(),
+                "bk_cfg": bk_cfg, "bk_log": bk_log,
                 "error": "Password lama salah.",
             })
         if len(new_password) < 4:
             return tpl.TemplateResponse(request, "settings.html", context={
                 "user": user, "page": "settings", "services": get_all_services(),
+                "bk_cfg": bk_cfg, "bk_log": bk_log,
                 "error": "Password baru minimal 4 karakter.",
             })
         hashed = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-        db.execute("UPDATE users SET password=? WHERE username=?", (hashed, user))
-        db.commit()
+        d.execute("UPDATE users SET password=? WHERE username=?", (hashed, user))
+        d.commit()
         return tpl.TemplateResponse(request, "settings.html", context={
             "user": user, "page": "settings", "services": get_all_services(),
+            "bk_cfg": bk_cfg, "bk_log": bk_log,
             "success": "Password berhasil diubah!",
         })
     finally:
-        db.close()
+        d.close()
+
+
+# ── Telegram Backup Settings ────────────────────────────
+@app.post("/settings/telegram")
+async def settings_telegram_save(request: Request):
+    """Save Telegram backup configuration."""
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    form = await request.form()
+    token = (form.get("tg_bot_token") or "").strip()
+    chat_id = (form.get("tg_chat_id") or "").strip()
+    enabled = "tg_enabled" in form
+    interval = (form.get("tg_interval") or "24h").strip()
+    compress = "tg_compress" in form
+    split_mode = (form.get("tg_split_mode") or "single").strip()
+    try:
+        chunk_mb = max(5, min(45, int(form.get("tg_chunk_mb") or 45)))
+    except ValueError:
+        chunk_mb = 45
+
+    if interval not in _BACKUP_INTERVALS:
+        return JSONResponse({"error": "interval tidak valid"}, 400)
+    if split_mode not in ("single", "table", "chunk"):
+        return JSONResponse({"error": "split_mode tidak valid"}, 400)
+
+    d = get_db()
+    try:
+        # Only update token if provided (to allow keeping existing without re-typing)
+        if token:
+            db.set_setting(d, "tg_bot_token", token)
+        if chat_id:
+            db.set_setting(d, "tg_chat_id", chat_id)
+        db.set_setting(d, "tg_enabled", "1" if enabled else "0")
+        db.set_setting(d, "tg_interval", interval)
+        db.set_setting(d, "tg_compress", "1" if compress else "0")
+        db.set_setting(d, "tg_split_mode", split_mode)
+        db.set_setting(d, "tg_chunk_mb", str(chunk_mb))
+        d.commit()
+    finally:
+        d.close()
+    return JSONResponse({"ok": True, "msg": "Telegram backup config saved"})
+
+
+@app.post("/api/backup/test-tg")
+async def api_backup_test_tg(request: Request):
+    """Send a test message to verify Telegram bot connection."""
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        cfg = db.get_all_settings(d, prefix="tg_")
+    finally:
+        d.close()
+    token = cfg.get("tg_bot_token", "")
+    chat_id = cfg.get("tg_chat_id", "")
+    if not token or not chat_id:
+        return JSONResponse({"error": "Bot token / chat ID belum diisi"}, 400)
+    try:
+        text = (
+            f"🧪 <b>Service Manager — Test Connection</b>\n"
+            f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"👤 by: {user}\n"
+            f"✅ Telegram backup terhubung"
+        )
+        result = await tg_send_message(token, chat_id, text)
+        if result.get("ok"):
+            return JSONResponse({"ok": True, "msg": "Test message terkirim! Cek chat Telegram."})
+        return JSONResponse({"error": result.get("description", "unknown error")}, 400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, 500)
+
+
+@app.post("/api/backup/run")
+async def api_backup_run(request: Request):
+    """Trigger an immediate backup."""
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    result = await tg_backup_now(trigger="manual")
+    if result.get("status") == "success":
+        return JSONResponse({"ok": True, **result})
+    return JSONResponse({"ok": False, **result}, 200 if result.get("status") == "skipped" else 500)
+
+
+@app.get("/api/backup/history")
+async def api_backup_history(request: Request):
+    """Get recent backup runs."""
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        rows = db.get_backup_log(d, limit=20)
+    finally:
+        d.close()
+    return JSONResponse({"runs": rows})
 
 # ── Search API (from DB — searches ALL scraped komik) ───
 @app.get("/api/search")
@@ -616,13 +1283,18 @@ async def api_komik_detail(komik_id: int):
         r = db.execute("SELECT * FROM komik WHERE id=?", (komik_id,)).fetchone()
         if not r:
             return JSONResponse({"error": "not found"}, 404)
-        chapters = db.execute("""
-            SELECT c.text, c.url, c.date, 
+        chapters_raw = db.execute("""
+            SELECT c.id, c.text, c.number, c.url, c.date,
                    CASE WHEN rs.id IS NOT NULL THEN 1 ELSE 0 END as is_read
             FROM chapters c
             LEFT JOIN read_status rs ON rs.chapter_id = c.id
-            WHERE c.komik_id=? ORDER BY c.id DESC
+            WHERE c.komik_id=?
         """, (komik_id,)).fetchall()
+        chapters_sorted = sorted(
+            chapters_raw,
+            key=lambda c: (parse_chapter_num(c["text"], c["number"]), c["id"]),
+            reverse=True,
+        )
         return JSONResponse({
             "id": r["id"], "title": r["title"], "url": r["url"], "image": r["image"],
             "type": r["type"], "status": r["status"], "rating": r["rating"],
@@ -631,7 +1303,7 @@ async def api_komik_detail(komik_id: int):
             "author": r["author"], "artist": r["artist"],
             "synopsis": r["synopsis"], "alt_title": r["alt_title"],
             "source": r["source"],
-            "chapters": [{"text": c["text"], "url": c["url"], "date": c["date"], "read": bool(c["is_read"])} for c in chapters],
+            "chapters": [{"text": c["text"], "url": c["url"], "date": c["date"], "read": bool(c["is_read"])} for c in chapters_sorted],
         })
     finally:
         db.close()
@@ -674,25 +1346,26 @@ async def read_chapter(request: Request):
     prev_ch = None
     next_ch = None
     try:
-        ch_row = db.execute("SELECT id, komik_id FROM chapters WHERE url=?", (chapter_url,)).fetchone()
+        ch_row = db.execute("SELECT id, text, number, komik_id FROM chapters WHERE url=?", (chapter_url,)).fetchone()
         if ch_row:
             db.execute("INSERT OR IGNORE INTO read_status (chapter_id) VALUES (?)", (ch_row["id"],))
             db.commit()
-            # Find prev/next chapters (by id order)
-            # Next = newer chapter (higher id)
-            nxt = db.execute(
-                "SELECT url, text FROM chapters WHERE komik_id=? AND id > ? ORDER BY id ASC LIMIT 1",
-                (ch_row["komik_id"], ch_row["id"])
-            ).fetchone()
-            # Prev = older chapter (lower id)
-            prv = db.execute(
-                "SELECT url, text FROM chapters WHERE komik_id=? AND id < ? ORDER BY id DESC LIMIT 1",
-                (ch_row["komik_id"], ch_row["id"])
-            ).fetchone()
-            if nxt:
-                next_ch = {"url": nxt["url"], "text": nxt["text"]}
-            if prv:
-                prev_ch = {"url": prv["url"], "text": prv["text"]}
+            # Build chapter list sorted by parsed number; find prev/next relative to current
+            siblings = db.execute(
+                "SELECT id, text, number, url FROM chapters WHERE komik_id=?",
+                (ch_row["komik_id"],)
+            ).fetchall()
+            sorted_chs = sorted(
+                siblings,
+                key=lambda c: (parse_chapter_num(c["text"], c["number"]), c["id"]),
+            )  # ascending: oldest -> newest
+            cur_idx = next((i for i, c in enumerate(sorted_chs) if c["id"] == ch_row["id"]), -1)
+            if cur_idx > 0:
+                p = sorted_chs[cur_idx - 1]
+                prev_ch = {"url": p["url"], "text": p["text"]}
+            if 0 <= cur_idx < len(sorted_chs) - 1:
+                n = sorted_chs[cur_idx + 1]
+                next_ch = {"url": n["url"], "text": n["text"]}
     except Exception:
         pass
     finally:
@@ -915,16 +1588,30 @@ async def komik_detail_page(request: Request, komik_id: int):
         r = conn.execute("SELECT * FROM komik WHERE id=?", (komik_id,)).fetchone()
         if not r:
             return RedirectResponse("/search", 302)
-        chapters = conn.execute(
-            "SELECT c.id, c.text, c.url, c.date, CASE WHEN rs.id IS NOT NULL THEN 1 ELSE 0 END as is_read FROM chapters c LEFT JOIN read_status rs ON rs.chapter_id=c.id WHERE c.komik_id=? ORDER BY c.id DESC",
+        chapter_rows = conn.execute(
+            "SELECT c.id, c.text, c.number, c.url, c.date, "
+            "CASE WHEN rs.id IS NOT NULL THEN 1 ELSE 0 END as is_read "
+            "FROM chapters c LEFT JOIN read_status rs ON rs.chapter_id=c.id "
+            "WHERE c.komik_id=?",
             (komik_id,)
         ).fetchall()
+        # Sort by parsed chapter number (descending = newest first), with id as tiebreaker
+        chapters = sorted(
+            (dict(c) for c in chapter_rows),
+            key=lambda c: (parse_chapter_num(c.get("text", ""), c.get("number", "")), c.get("id", 0)),
+            reverse=True,
+        )
         is_bookmarked = conn.execute("SELECT id FROM bookmarks WHERE komik_id=?", (komik_id,)).fetchone() is not None
+        total = len(chapters)
+        read_count = sum(1 for c in chapters if c.get("is_read"))
         komik = {
             **dict(r),
             "genres": json.loads(r["genres"]) if r["genres"] else [],
-            "chapters": [dict(c) for c in chapters],
+            "chapters": chapters,
             "is_bookmarked": is_bookmarked,
+            "total_chapters_count": total,
+            "read_count": read_count,
+            "read_pct": round(read_count / total * 100, 1) if total else 0.0,
         }
     finally:
         conn.close()
@@ -1058,7 +1745,16 @@ async def anime_page(request: Request):
 
     db = get_db()
     try:
-        rows = db.execute("SELECT * FROM anime").fetchall()
+        # Single query with episode counts via LEFT JOIN (was N+1 — 1 query per anime)
+        rows = db.execute("""
+            SELECT a.*, COALESCE(ec.cnt, 0) AS ep_count
+            FROM anime a
+            LEFT JOIN (
+                SELECT anime_id, COUNT(*) AS cnt
+                FROM anime_episodes
+                GROUP BY anime_id
+            ) ec ON ec.anime_id = a.id
+        """).fetchall()
         bookmarked_ids = set(
             r["anime_id"] for r in db.execute("SELECT anime_id FROM anime_bookmarks").fetchall()
         )
@@ -1068,8 +1764,6 @@ async def anime_page(request: Request):
         for r in rows:
             a = dict(r)
             a["genres"] = json.loads(a["genres"]) if a["genres"] else []
-            ep_count = db.execute("SELECT COUNT(*) FROM anime_episodes WHERE anime_id=?", (a["id"],)).fetchone()[0]
-            a["ep_count"] = ep_count
             a["bookmarked"] = a["id"] in bookmarked_ids
             if not a.get("day"):
                 a["day"] = ""
@@ -1485,23 +2179,28 @@ async def anime_detail_page(request: Request, url: str = Query("")):
 # ══════════════════════════════════════════════════════════
 
 def get_server_info() -> dict:
-    """Gather comprehensive server information."""
+    """Gather comprehensive server information.
+
+    Optimized: avoids blocking cpu_percent calls and double process_iter.
+    """
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
     disk = psutil.disk_usage("/")
     boot = datetime.fromtimestamp(psutil.boot_time(), tz=timezone.utc)
     uptime_sec = (datetime.now(timezone.utc) - boot).total_seconds()
 
-    # CPU info
+    # CPU info (non-blocking — uses delta since last call)
     cpu_freq = psutil.cpu_freq()
     load1, load5, load15 = os.getloadavg()
 
     # Network I/O
     net = psutil.net_io_counters()
 
-    # Top processes by memory
+    # Top processes by memory — single pass, count + collect
     procs = []
+    total_procs = 0
     for p in psutil.process_iter(['pid', 'name', 'memory_percent', 'cpu_percent', 'memory_info', 'status']):
+        total_procs += 1
         try:
             info = p.info
             if info['memory_percent'] and info['memory_percent'] > 0.5:
@@ -1520,8 +2219,8 @@ def get_server_info() -> dict:
     return {
         "cpu_count": psutil.cpu_count(),
         "cpu_freq": round(cpu_freq.current, 0) if cpu_freq else 0,
-        "cpu_pct": psutil.cpu_percent(interval=0.3),
-        "cpu_per_core": psutil.cpu_percent(interval=0.1, percpu=True),
+        "cpu_pct": psutil.cpu_percent(interval=None),
+        "cpu_per_core": psutil.cpu_percent(interval=None, percpu=True),
         "load1": round(load1, 2), "load5": round(load5, 2), "load15": round(load15, 2),
         "mem_total": round(mem.total / 1024**3, 2),
         "mem_used": round(mem.used / 1024**3, 2),
@@ -1544,7 +2243,7 @@ def get_server_info() -> dict:
         "uptime_str": f"{int(uptime_sec//86400)}d {int((uptime_sec%86400)//3600)}h {int((uptime_sec%3600)//60)}m",
         "boot_time": boot.strftime("%Y-%m-%d %H:%M:%S UTC"),
         "processes": procs[:15],
-        "total_procs": len(list(psutil.process_iter())),
+        "total_procs": total_procs,
     }
 
 
@@ -1959,16 +2658,17 @@ async def fruityblox_monitor(request: Request):
     conn.close()
     
     # Get updated_at from API for accurate rotation time
-    import requests
+    import httpx as _httpx
     updated_at_str = ""
     next_rotation_str = ""
     next_rotation_iso = ""
     try:
-        r = requests.get(
-            "https://raw.githubusercontent.com/iamishan877-max/Blox-Fruits-Stock/main/data/stock.json",
-            timeout=5, headers={'User-Agent': 'FruityBlox-Monitor/1.0'}
-        )
-        api_data = r.json()
+        async with _httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(
+                "https://raw.githubusercontent.com/iamishan877-max/Blox-Fruits-Stock/main/data/stock.json",
+                headers={'User-Agent': 'FruityBlox-Monitor/1.0'}
+            )
+            api_data = r.json()
         raw_updated = api_data.get('updated_at', '')
         if raw_updated:
             from datetime import timezone
@@ -2099,14 +2799,15 @@ async def test_fruityblox_notification(request: Request):
         mirage_stock = db.get_latest_fruityblox_stock(conn, 'mirage')
 
         # Get updated_at from GitHub API
-        import requests
+        import httpx as _httpx
         updated_at = None
         try:
-            r = requests.get(
-                "https://raw.githubusercontent.com/iamishan877-max/Blox-Fruits-Stock/main/data/stock.json",
-                timeout=8, headers={'User-Agent': 'FruityBlox-Monitor/1.0'}
-            )
-            updated_at = r.json().get('updated_at')
+            async with _httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(
+                    "https://raw.githubusercontent.com/iamishan877-max/Blox-Fruits-Stock/main/data/stock.json",
+                    headers={'User-Agent': 'FruityBlox-Monitor/1.0'}
+                )
+                updated_at = r.json().get('updated_at')
         except Exception:
             pass
 
@@ -2123,14 +2824,15 @@ async def test_fruityblox_notification(request: Request):
             embeds.append(_build_fruityblox_embed('mirage', mirage_stock, updated_at))
 
         sent = 0
-        for embed in embeds:
-            payload = {'content': content if sent == 0 else '', 'embeds': [embed]}
-            requests.post(
-                webhook_url, json=payload,
-                headers={'User-Agent': 'FruityBlox-Monitor/1.0'},
-                timeout=10
-            ).raise_for_status()
-            sent += 1
+        async with _httpx.AsyncClient(timeout=10) as client:
+            for embed in embeds:
+                payload = {'content': content if sent == 0 else '', 'embeds': [embed]}
+                resp = await client.post(
+                    webhook_url, json=payload,
+                    headers={'User-Agent': 'FruityBlox-Monitor/1.0'},
+                )
+                resp.raise_for_status()
+                sent += 1
 
         return JSONResponse({"success": True, "message": f"Berhasil kirim {sent} embed ke Discord!"})
 

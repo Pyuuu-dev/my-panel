@@ -1,89 +1,122 @@
 {% extends "base.html" %}
 {% block title %}{{ komik.title }}{% endblock %}
 {% block content %}
-<div class="max-w-4xl">
+<div class="max-w-5xl">
 
-<!-- Back -->
-<div class="mb-4">
-  <a href="/search" class="text-xs text-indigo-400 hover:opacity-80">← Kembali ke Search</a>
+<!-- Breadcrumb -->
+<div class="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider mb-4" style="color:var(--text-muted)">
+  <a href="/search" class="hover:text-[var(--accent)] flex items-center gap-1"><i data-lucide="arrow-left" class="w-3 h-3"></i> Search</a>
+  <i data-lucide="chevron-right" class="w-3 h-3"></i>
+  <span style="color:var(--text-secondary)">{{ komik.type or 'Komik' }}</span>
 </div>
 
 <!-- Header -->
-<div class="rounded-xl p-4 mb-4 flex gap-4" style="background:var(--bg2);border:1px solid var(--border)">
-  {% if komik.image %}
-  <img src="{{ komik.image }}" alt="{{ komik.title }}" class="w-24 h-32 object-cover rounded flex-shrink-0" onerror="this.style.display='none'">
-  {% endif %}
-  <div class="flex-1 min-w-0">
-    <h1 class="text-lg font-bold mb-1" style="color:var(--text)">{{ komik.title }}</h1>
-    {% if komik.alt_title %}<p class="text-[11px] mb-2" style="color:var(--text3)">{{ komik.alt_title }}</p>{% endif %}
-    <div class="flex flex-wrap gap-1 mb-2">
-      {% if komik.type %}<span class="text-[11px] px-2 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">{{ komik.type }}</span>{% endif %}
-      {% if komik.status %}<span class="text-[11px] px-2 py-0.5 rounded {% if komik.status == 'Ongoing' %}bg-emerald-500/20 text-emerald-400{% else %}bg-gray-500/20 text-gray-400{% endif %}">{{ komik.status }}</span>{% endif %}
-      {% if komik.color %}<span class="text-[11px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">Berwarna</span>{% endif %}
-    </div>
-    {% if komik.genres %}
-    <div class="flex flex-wrap gap-1 mb-2">
-      {% for g in komik.genres %}<span class="text-[10px] px-1.5 py-0.5 rounded" style="background:var(--bg3);color:var(--text3)">{{ g }}</span>{% endfor %}
-    </div>
+<div class="card p-5 mb-4 fade-in">
+  <div class="flex flex-col sm:flex-row gap-5">
+    {% if komik.image %}
+    <img src="{{ komik.image }}" alt="{{ komik.title }}" class="w-32 h-44 sm:w-36 sm:h-52 object-cover rounded-lg flex-shrink-0 self-start" onerror="this.style.display='none'">
     {% endif %}
-    {% if komik.author %}<p class="text-[11px] mb-1" style="color:var(--text3)">✍️ {{ komik.author }}</p>{% endif %}
-    <p class="text-[11px]" style="color:var(--text3)">📚 {{ komik.chapters|length }} chapters</p>
-    <div class="flex gap-2 mt-3">
-      <button onclick="toggleBookmark({{ komik.id }}, this)"
-        class="px-3 py-1.5 rounded-lg text-xs font-medium {% if komik.is_bookmarked %}bg-yellow-500/20 text-yellow-400{% else %}bg-indigo-600/20 text-indigo-400{% endif %}">
-        {% if komik.is_bookmarked %}⭐ Bookmarked{% else %}☆ Bookmark{% endif %}
-      </button>
-      {% if komik.url %}
-      <a href="{{ komik.url }}" target="_blank" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:var(--bg3);color:var(--text2)">🔗 Buka di Komiku</a>
+    <div class="flex-1 min-w-0">
+      <h1 class="text-xl md:text-2xl font-semibold tracking-tight mb-1">{{ komik.title }}</h1>
+      {% if komik.alt_title %}<p class="text-xs mb-3" style="color:var(--text-muted)">{{ komik.alt_title }}</p>{% endif %}
+
+      <div class="flex flex-wrap gap-1.5 mb-3">
+        {% if komik.type %}<span class="badge badge-muted">{{ komik.type }}</span>{% endif %}
+        {% if komik.status %}<span class="badge {% if komik.status == 'Ongoing' %}badge-success{% else %}badge-muted{% endif %}">{{ komik.status }}</span>{% endif %}
+        {% if komik.color %}<span class="badge" style="background:rgba(168,85,247,0.15);color:#a855f7">Color</span>{% endif %}
+        {% if komik.rating %}<span class="badge" style="background:rgba(251,191,36,0.15);color:#fbbf24">★ {{ komik.rating }}</span>{% endif %}
+      </div>
+
+      {% if komik.genres %}
+      <div class="flex flex-wrap gap-1 mb-3">
+        {% for g in komik.genres %}<span class="text-[11px] px-2 py-0.5 rounded-full" style="background:var(--bg-elevated);color:var(--text-secondary)">{{ g }}</span>{% endfor %}
+      </div>
       {% endif %}
+
+      <div class="space-y-1 text-xs mb-4" style="color:var(--text-secondary)">
+        {% if komik.author %}<div class="flex items-center gap-2"><i data-lucide="user" class="w-3 h-3"></i> {{ komik.author }}</div>{% endif %}
+        <div class="flex items-center gap-2"><i data-lucide="book-marked" class="w-3 h-3"></i> {{ komik.chapters|length }} chapters</div>
+        {% if komik.read_count %}
+        <div class="flex items-center gap-2">
+          <i data-lucide="check-circle-2" class="w-3 h-3" style="color:#10b981"></i>
+          <span style="color:var(--text-primary)" class="font-medium">{{ komik.read_count }}/{{ komik.total_chapters_count }}</span>
+          <span style="color:var(--text-muted)">read</span>
+          <span class="font-mono text-[11px] px-1.5 py-0.5 rounded" style="background:var(--bg-elevated);color:var(--accent)">{{ komik.read_pct }}%</span>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if komik.total_chapters_count %}
+      <!-- Reading progress bar -->
+      <div class="mb-4">
+        <div class="w-full h-1.5 rounded-full overflow-hidden" style="background:var(--bg-elevated)">
+          <div class="h-full rounded-full transition-all duration-500"
+               style="width:{{ komik.read_pct }}%;background:linear-gradient(90deg, var(--accent), #10b981)"></div>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="flex flex-wrap gap-2">
+        <button onclick="toggleBookmark({{ komik.id }}, this)" class="btn {% if komik.is_bookmarked %}btn-sm{% else %}btn-primary btn-sm{% endif %}" {% if komik.is_bookmarked %}style="background:rgba(245,158,11,0.2);color:#fbbf24;border:1px solid rgba(245,158,11,0.4)"{% endif %}>
+          <i data-lucide="{{ 'bookmark-check' if komik.is_bookmarked else 'bookmark-plus' }}" class="w-3.5 h-3.5"></i>
+          {% if komik.is_bookmarked %}Bookmarked{% else %}Bookmark{% endif %}
+        </button>
+        {% if komik.url %}
+        <a href="{{ komik.url }}" target="_blank" class="btn btn-ghost btn-sm">
+          <i data-lucide="external-link" class="w-3.5 h-3.5"></i> Source
+        </a>
+        {% endif %}
+      </div>
     </div>
   </div>
 </div>
 
 {% if komik.synopsis %}
-<div class="rounded-xl p-4 mb-4" style="background:var(--bg2);border:1px solid var(--border)">
-  <h3 class="text-xs font-semibold mb-2" style="color:var(--text3)">SYNOPSIS</h3>
-  <p class="text-sm leading-relaxed" style="color:var(--text2)">{{ komik.synopsis }}</p>
+<div class="card p-5 mb-4">
+  <h3 class="text-[11px] font-mono uppercase tracking-wider mb-2" style="color:var(--text-muted)">Synopsis</h3>
+  <p class="text-sm leading-relaxed" style="color:var(--text-secondary)">{{ komik.synopsis }}</p>
 </div>
 {% endif %}
 
 <!-- Chapter List -->
-<div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
-  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-    <h3 class="text-sm font-semibold" style="color:var(--text)">
-      Chapter List
-      <span class="text-xs font-normal ml-1" style="color:var(--text3)">({{ komik.chapters|length }} chapters)</span>
-    </h3>
+<div class="card p-5">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
     <div class="flex items-center gap-2">
-      <input type="text" id="ch-search" placeholder="Cari chapter..."
-        oninput="filterChapters(this.value)"
-        class="px-2 py-1 rounded text-xs focus:outline-none"
-        style="background:var(--bg3);border:1px solid var(--border);color:var(--text);width:130px">
-      <button id="sort-btn" onclick="toggleSort()" title="Toggle urutan"
-        class="px-2 py-1 rounded text-xs font-medium flex items-center gap-1"
-        style="background:var(--bg3);border:1px solid var(--border);color:var(--text2)">
-        <span id="sort-icon">↓</span> <span id="sort-label">Terbaru</span>
+      <i data-lucide="list" class="w-4 h-4" style="color:var(--accent)"></i>
+      <h3 class="text-sm font-semibold tracking-tight">Chapters</h3>
+      <span class="badge badge-muted">{{ komik.chapters|length }}</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <div class="relative">
+        <i data-lucide="search" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2" style="color:var(--text-muted)"></i>
+        <input type="text" id="ch-search" placeholder="Cari..." oninput="filterChapters(this.value)"
+          class="input pl-8" style="width:160px;padding-top:6px;padding-bottom:6px">
+      </div>
+      <button id="sort-btn" onclick="toggleSort()" class="btn btn-ghost btn-sm" title="Toggle urutan">
+        <i data-lucide="arrow-down" class="w-3.5 h-3.5" id="sort-icon"></i>
+        <span id="sort-label">Terbaru</span>
       </button>
     </div>
   </div>
 
-  <div id="ch-list" class="space-y-0 max-h-[600px] overflow-y-auto" data-sort="desc">
+  <div id="ch-list" class="space-y-0 max-h-[640px] overflow-y-auto pr-1" data-sort="desc">
     {% for ch in komik.chapters %}
-    <div class="ch-row flex items-center justify-between px-2 py-1.5 {% if ch.is_read %}opacity-50{% endif %} hover:opacity-80"
-         style="border-bottom:1px solid var(--border)" data-text="{{ ch.text|lower }}">
+    <div class="ch-row flex items-center justify-between px-3 py-2 rounded-md {% if ch.is_read %}opacity-50{% endif %} hover:bg-[var(--bg-elevated)] transition-colors"
+         style="border-bottom:1px solid var(--border-subtle)" data-text="{{ ch.text|lower }}">
       <div class="flex items-center gap-2 min-w-0">
-        <span id="ch-txt-{{ loop.index0 }}" class="text-[12px] {% if ch.is_read %}line-through{% endif %} truncate" style="color:var(--text2)">
-          {{ ch.text }}{% if ch.is_read %} ✓{% endif %}
-        </span>
-        {% if ch.date %}<span class="text-[10px] flex-shrink-0" style="color:var(--text3)">{{ ch.date }}</span>{% endif %}
+        <i data-lucide="{{ 'check-circle-2' if ch.is_read else 'circle' }}" class="w-3.5 h-3.5 flex-shrink-0" style="color:{{ '#10b981' if ch.is_read else 'var(--text-muted)' }}"></i>
+        <span id="ch-txt-{{ loop.index0 }}" class="text-sm {% if ch.is_read %}line-through{% endif %} truncate" style="color:var(--text-secondary)">{{ ch.text }}</span>
+        {% if ch.date %}<span class="text-[10px] font-mono flex-shrink-0" style="color:var(--text-muted)">{{ ch.date }}</span>{% endif %}
       </div>
-      <div class="flex items-center gap-1 flex-shrink-0 ml-2">
+      <div class="flex items-center gap-1.5 flex-shrink-0 ml-2">
         <a href="/read?url={{ ch.url|urlencode }}"
            onclick="markRead({{ loop.index0 }}, '{{ ch.url }}', '{{ ch.text|replace("'", "\\'") }}')"
-           class="text-[10px] px-2 py-0.5 rounded bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/40">Baca</a>
+           class="text-xs px-2.5 py-1 rounded-md font-medium" style="background:var(--accent-muted);color:var(--accent)">Baca</a>
         <a href="{{ ch.url }}" target="_blank"
            onclick="markRead({{ loop.index0 }}, '{{ ch.url }}', '{{ ch.text|replace("'", "\\'") }}')"
-           class="text-[10px] px-1.5 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">↗</a>
+           class="text-xs px-2 py-1 rounded-md" style="background:var(--bg-elevated);color:var(--text-secondary)">
+          <i data-lucide="external-link" class="w-3 h-3"></i>
+        </a>
       </div>
     </div>
     {% endfor %}
@@ -110,16 +143,23 @@ function toggleSort() {
   rows.reverse();
   rows.forEach(r => list.appendChild(r));
   list.dataset.sort = isDesc ? 'asc' : 'desc';
-  icon.textContent = isDesc ? '↑' : '↓';
+  icon.setAttribute('data-lucide', isDesc ? 'arrow-up' : 'arrow-down');
   label.textContent = isDesc ? 'Terlama' : 'Terbaru';
+  if (window.lucide) lucide.createIcons();
 }
 
 function markRead(i, url, text) {
-  const row = document.querySelector(`.ch-row:nth-child(${i+1})`);
+  const row = document.querySelectorAll('.ch-row')[i];
   const txt = document.getElementById('ch-txt-' + i);
   if (row && !row.classList.contains('opacity-50')) {
     row.classList.add('opacity-50');
-    if (txt) { txt.classList.add('line-through'); txt.textContent = text + ' ✓'; }
+    if (txt) txt.classList.add('line-through');
+    const icon = row.querySelector('[data-lucide]');
+    if (icon) {
+      icon.setAttribute('data-lucide', 'check-circle-2');
+      icon.style.color = '#10b981';
+      if (window.lucide) lucide.createIcons();
+    }
     fetch('/api/read', {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -137,14 +177,23 @@ function toggleBookmark(id, btn) {
     body: 'komik_id=' + id
   }).then(r => r.json()).then(d => {
     if (d.ok) {
-      if (action === 'add') {
-        btn.textContent = '⭐ Bookmarked';
-        btn.className = 'px-3 py-1.5 rounded-lg text-xs font-medium bg-yellow-500/20 text-yellow-400';
+      if (d.bookmarked) {
+        btn.innerHTML = '<i data-lucide="bookmark-check" class="w-3.5 h-3.5"></i> Bookmarked';
+        btn.className = 'btn btn-sm';
+        btn.setAttribute('style', 'background:rgba(245,158,11,0.2);color:#fbbf24;border:1px solid rgba(245,158,11,0.4)');
+        if (window.toast) window.toast('Bookmark ditambahkan', 'success');
       } else {
-        btn.textContent = '☆ Bookmark';
-        btn.className = 'px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600/20 text-indigo-400';
+        btn.innerHTML = '<i data-lucide="bookmark-plus" class="w-3.5 h-3.5"></i> Bookmark';
+        btn.className = 'btn btn-primary btn-sm';
+        btn.removeAttribute('style');
+        if (window.toast) window.toast('Bookmark dihapus', 'info');
       }
+      if (window.lucide) lucide.createIcons();
+    } else if (window.toast) {
+      window.toast('Error: ' + (d.error || 'gagal update bookmark'), 'error');
     }
+  }).catch(e => {
+    if (window.toast) window.toast('Network error: ' + e.message, 'error');
   });
 }
 </script>

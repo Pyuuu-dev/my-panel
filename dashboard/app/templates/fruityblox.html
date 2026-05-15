@@ -1,116 +1,136 @@
 {% extends "base.html" %}
-{% block title %}FruityBlox Stock Monitor{% endblock %}
+{% block title %}Blox Fruits Stock{% endblock %}
 {% block content %}
-<div class="max-w-5xl">
 
-<div class="mb-6">
-  <h1 class="text-xl font-bold">🍎 Blox Fruits Stock Monitor</h1>
-  <p class="text-xs mt-1" style="color:var(--text3)">Live stock for Normal and Mirage dealers. Polling setiap 30 menit, notify saat rotasi berubah.</p>
+{% set fruit_emoji = {
+  'rocket':'🚀','spin':'🌀','chop':'✂️','spring':'🌸','bomb':'💣','smoke':'💨','spike':'🔱',
+  'flame':'🔥','falcon':'🦅','ice':'❄️','sand':'🏖️','dark':'🌑','diamond':'💎','light':'✨',
+  'rubber':'🎈','barrier':'🛡️','ghost':'👻','magma':'🌋','quake':'💥','buddha':'🧘',
+  'love':'💗','spider':'🕷️','sound':'🔊','phoenix':'🔥','portal':'🌀','rumble':'⚡',
+  'pain':'💢','blizzard':'🌨️','gravity':'🌌','mammoth':'🦣','dough':'🍩','shadow':'👤',
+  'venom':'☠️','control':'🎮','spirit':'👻','dragon':'🐉','leopard':'🐆','kitsune':'🦊',
+  'trex':'🦖','blade':'⚔️','creation':'🌟'
+} %}
+
+<div class="max-w-6xl">
+
+<!-- Header -->
+<div class="flex items-center justify-between mb-5 fade-in">
+  <div>
+    <div class="flex items-center gap-2 mb-2">
+      <i data-lucide="apple" class="w-4 h-4" style="color:var(--accent)"></i>
+      <span class="text-xs font-mono uppercase tracking-wider" style="color:var(--accent)">Blox Fruits Live</span>
+    </div>
+    <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">Stock Monitor</h1>
+    <p class="text-sm mt-1" style="color:var(--text-secondary)">Live stock untuk Normal & Mirage dealer · polling 30 menit</p>
+  </div>
+  <div class="flex gap-2">
+    <a href="/fruityblox/history" class="btn btn-ghost btn-sm"><i data-lucide="history" class="w-3.5 h-3.5"></i> History</a>
+    <a href="/fruityblox/config" class="btn btn-primary btn-sm"><i data-lucide="settings" class="w-3.5 h-3.5"></i> Configure</a>
+  </div>
 </div>
 
-<!-- Info Bar -->
-<div class="rounded-xl p-4 mb-6 flex flex-wrap items-center gap-4 justify-between" style="background:var(--bg2);border:1px solid var(--border)">
-  <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-    <div>
-      <span style="color:var(--text3)">⏰ Stock Update:</span>
-      <span class="font-semibold ml-1" style="color:var(--text)">{{ updated_at_str or 'N/A' }}</span>
+<!-- Info bar -->
+<div class="card p-4 mb-6 grid grid-cols-1 md:grid-cols-2 gap-3">
+  <div class="flex items-center gap-3">
+    <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:var(--accent-muted)">
+      <i data-lucide="clock" class="w-4 h-4" style="color:var(--accent)"></i>
     </div>
     <div>
-      <span style="color:var(--text3)">⏭️ Next Rotation:</span>
-      <span class="font-semibold ml-1 text-indigo-400" id="countdown">{{ next_rotation_str or '...' }}</span>
+      <div class="text-[10px] font-mono uppercase tracking-wider" style="color:var(--text-muted)">Last Update</div>
+      <div class="text-sm font-semibold tracking-tight">{{ updated_at_str or 'N/A' }}</div>
     </div>
   </div>
-  <a href="/fruityblox/config" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:var(--bg3);color:var(--text2)">⚙️ Configure</a>
+  <div class="flex items-center gap-3">
+    <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:rgba(245,158,11,0.15)">
+      <i data-lucide="timer" class="w-4 h-4" style="color:#fbbf24"></i>
+    </div>
+    <div class="flex-1 min-w-0">
+      <div class="text-[10px] font-mono uppercase tracking-wider" style="color:var(--text-muted)">Next Rotation</div>
+      <div class="text-sm font-semibold tracking-tight font-mono" id="countdown" style="color:#fbbf24">{{ next_rotation_str or '...' }}</div>
+    </div>
+  </div>
 </div>
 
 <!-- Stock Grid -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
   <!-- Normal Stock -->
-  <div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+  <div class="card p-5">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-bold" style="color:var(--text)">🍎 Normal Stock</h2>
-      <span class="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400">{{ normal_stock|length }} fruits</span>
+      <div class="flex items-center gap-2">
+        <i data-lucide="package" class="w-4 h-4" style="color:var(--accent)"></i>
+        <h2 class="text-base font-semibold tracking-tight">Normal Stock</h2>
+      </div>
+      <span class="badge badge-accent">{{ normal_stock|length }} fruits</span>
     </div>
 
     {% if normal_stock %}
     <div class="space-y-2">
       {% for fruit in normal_stock %}
       {% set rc = 'text-red-400' if fruit.rarity == 'mythical' else 'text-yellow-400' if fruit.rarity == 'legendary' else 'text-purple-400' if fruit.rarity == 'rare' else 'text-blue-400' if fruit.rarity == 'uncommon' else 'text-gray-400' %}
-      {% set fruit_emoji = {
-        'rocket':'🚀','spin':'🌀','chop':'✂️','spring':'🌸','bomb':'💣','smoke':'💨','spike':'🔱',
-        'flame':'🔥','falcon':'🦅','ice':'❄️','sand':'🏖️','dark':'🌑','diamond':'💎','light':'✨',
-        'rubber':'🎈','barrier':'🛡️','ghost':'👻','magma':'🌋','quake':'💥','buddha':'🧘',
-        'love':'💗','spider':'🕷️','sound':'🔊','phoenix':'🔥','portal':'🌀','rumble':'⚡',
-        'pain':'💢','blizzard':'🌨️','gravity':'🌌','mammoth':'🦣','dough':'🍩','shadow':'👤',
-        'venom':'☠️','control':'🎮','spirit':'👻','dragon':'🐉','leopard':'🐆','kitsune':'🦊',
-        'trex':'🦖','blade':'⚔️','creation':'🌟'
-      } %}
       {% set emoji = fruit_emoji.get(fruit.fruit_name.split('-')[0].lower(), '🍎') %}
-      <div class="flex items-center gap-3 py-2 px-3 rounded-lg" style="background:var(--bg3)">
-        <span class="text-xl">{{ emoji }}</span>
+      <div class="flex items-center gap-3 py-2.5 px-3 rounded-lg hover:border-[var(--accent)] transition-all" style="background:var(--bg-elevated);border:1px solid var(--border-subtle)">
+        <div class="text-2xl flex-shrink-0">{{ emoji }}</div>
         <div class="flex-1 min-w-0">
-          <div class="text-sm font-medium" style="color:var(--text)">{{ fruit.fruit_name }}</div>
-          <span class="text-[10px] {{ rc }}">{{ fruit.rarity|title }}</span>
+          <div class="text-sm font-medium">{{ fruit.fruit_name }}</div>
+          <span class="text-[10px] uppercase tracking-wider {{ rc }}">{{ fruit.rarity|title }}</span>
         </div>
-        <div class="text-right">
-          <div class="text-sm font-semibold" style="color:var(--text)">💰 {{ "{:,}".format(fruit.price_beli) }}</div>
-          {% if fruit.price_robux %}<div class="text-[11px]" style="color:var(--text3)">💎 {{ "{:,}".format(fruit.price_robux) }}</div>{% endif %}
+        <div class="text-right flex-shrink-0">
+          <div class="text-sm font-semibold font-mono">${{ "{:,}".format(fruit.price_beli) }}</div>
+          {% if fruit.price_robux %}<div class="text-[11px] font-mono" style="color:var(--text-muted)">R$ {{ "{:,}".format(fruit.price_robux) }}</div>{% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
     {% else %}
-    <div class="text-center py-8" style="color:var(--text3)"><div class="text-3xl mb-2">📭</div><div class="text-sm">No data</div></div>
+    <div class="text-center py-12" style="color:var(--text-muted)">
+      <i data-lucide="inbox" class="w-10 h-10 mx-auto mb-2"></i>
+      <div class="text-sm">No data</div>
+    </div>
     {% endif %}
   </div>
 
   <!-- Mirage Stock -->
-  <div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
+  <div class="card p-5">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-bold" style="color:var(--text)">✨ Mirage Stock</h2>
-      <span class="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400">{{ mirage_stock|length }} fruits</span>
+      <div class="flex items-center gap-2">
+        <i data-lucide="sparkles" class="w-4 h-4" style="color:#a855f7"></i>
+        <h2 class="text-base font-semibold tracking-tight">Mirage Stock</h2>
+      </div>
+      <span class="badge" style="background:rgba(168,85,247,0.15);color:#a855f7">{{ mirage_stock|length }} fruits</span>
     </div>
 
     {% if mirage_stock %}
     <div class="space-y-2">
       {% for fruit in mirage_stock %}
       {% set rc = 'text-red-400' if fruit.rarity == 'mythical' else 'text-yellow-400' if fruit.rarity == 'legendary' else 'text-purple-400' if fruit.rarity == 'rare' else 'text-blue-400' if fruit.rarity == 'uncommon' else 'text-gray-400' %}
-      {% set fruit_emoji = {
-        'rocket':'🚀','spin':'🌀','chop':'✂️','spring':'🌸','bomb':'💣','smoke':'💨','spike':'🔱',
-        'flame':'🔥','falcon':'🦅','ice':'❄️','sand':'🏖️','dark':'🌑','diamond':'💎','light':'✨',
-        'rubber':'🎈','barrier':'🛡️','ghost':'👻','magma':'🌋','quake':'💥','buddha':'🧘',
-        'love':'💗','spider':'🕷️','sound':'🔊','phoenix':'🔥','portal':'🌀','rumble':'⚡',
-        'pain':'💢','blizzard':'🌨️','gravity':'🌌','mammoth':'🦣','dough':'🍩','shadow':'👤',
-        'venom':'☠️','control':'🎮','spirit':'👻','dragon':'🐉','leopard':'🐆','kitsune':'🦊',
-        'trex':'🦖','blade':'⚔️','creation':'🌟'
-      } %}
       {% set emoji = fruit_emoji.get(fruit.fruit_name.split('-')[0].lower(), '✨') %}
-      <div class="flex items-center gap-3 py-2 px-3 rounded-lg" style="background:var(--bg3)">
-        <span class="text-xl">{{ emoji }}</span>
+      <div class="flex items-center gap-3 py-2.5 px-3 rounded-lg hover:border-[#a855f7] transition-all" style="background:var(--bg-elevated);border:1px solid var(--border-subtle)">
+        <div class="text-2xl flex-shrink-0">{{ emoji }}</div>
         <div class="flex-1 min-w-0">
-          <div class="text-sm font-medium" style="color:var(--text)">{{ fruit.fruit_name }}</div>
-          <span class="text-[10px] {{ rc }}">{{ fruit.rarity|title }}</span>
+          <div class="text-sm font-medium">{{ fruit.fruit_name }}</div>
+          <span class="text-[10px] uppercase tracking-wider {{ rc }}">{{ fruit.rarity|title }}</span>
         </div>
-        <div class="text-right">
-          <div class="text-sm font-semibold" style="color:var(--text)">💰 {{ "{:,}".format(fruit.price_beli) }}</div>
-          {% if fruit.price_robux %}<div class="text-[11px]" style="color:var(--text3)">💎 {{ "{:,}".format(fruit.price_robux) }}</div>{% endif %}
+        <div class="text-right flex-shrink-0">
+          <div class="text-sm font-semibold font-mono">${{ "{:,}".format(fruit.price_beli) }}</div>
+          {% if fruit.price_robux %}<div class="text-[11px] font-mono" style="color:var(--text-muted)">R$ {{ "{:,}".format(fruit.price_robux) }}</div>{% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
     {% else %}
-    <div class="text-center py-8" style="color:var(--text3)"><div class="text-3xl mb-2">📭</div><div class="text-sm">No data</div></div>
+    <div class="text-center py-12" style="color:var(--text-muted)">
+      <i data-lucide="inbox" class="w-10 h-10 mx-auto mb-2"></i>
+      <div class="text-sm">No data</div>
+    </div>
     {% endif %}
   </div>
-
 </div>
 
 <!-- Quick Links -->
-<div class="mt-4 flex flex-wrap gap-2">
-  <a href="/fruityblox/history" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:var(--bg2);border:1px solid var(--border);color:var(--text2)">📊 History</a>
-  <a href="/fruityblox/config" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:var(--bg2);border:1px solid var(--border);color:var(--text2)">⚙️ Configuration</a>
-  <a href="/services/fruityblox" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:var(--bg2);border:1px solid var(--border);color:var(--text2)">🔧 Service Control</a>
+<div class="mt-5 flex flex-wrap gap-2">
+  <a href="/services/fruityblox" class="btn btn-ghost btn-sm"><i data-lucide="cog" class="w-3.5 h-3.5"></i> Service Control</a>
 </div>
 
 </div>

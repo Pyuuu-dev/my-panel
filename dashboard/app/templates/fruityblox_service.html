@@ -1,36 +1,38 @@
 {% extends "base.html" %}
-{% block title %}FruityBlox - Service{% endblock %}
+{% block title %}FruityBlox · Service{% endblock %}
 {% block content %}
-<div class="max-w-5xl">
+<div class="max-w-6xl">
 
 <!-- Header -->
-<div class="flex items-center justify-between mb-4">
+<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5 fade-in">
   <div>
-    <h2 class="text-xl font-bold">🍎 FruityBlox Stock Monitor</h2>
-    <p class="text-xs mt-0.5" style="color:var(--text3)">Monitor Blox Fruits stock dari GitHub API</p>
+    <div class="flex items-center gap-2 mb-2">
+      <i data-lucide="apple" class="w-4 h-4" style="color:var(--accent)"></i>
+      <span class="text-xs font-mono uppercase tracking-wider" style="color:var(--accent)">Service</span>
+    </div>
+    <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">FruityBlox Monitor</h1>
+    <p class="text-sm mt-1" style="color:var(--text-secondary)">Monitor Blox Fruits stock dari GitHub API</p>
   </div>
   <div class="flex items-center gap-2">
-    {% if status.state == "RUNNING" %}
-    <span class="flex items-center gap-1.5 text-xs text-emerald-400"><span class="w-2 h-2 bg-emerald-500 rounded-full"></span>RUNNING</span>
-    {% elif status.state == "STOPPED" %}
-    <span class="flex items-center gap-1.5 text-xs text-gray-400"><span class="w-2 h-2 bg-gray-500 rounded-full"></span>STOPPED</span>
-    {% else %}
-    <span class="flex items-center gap-1.5 text-xs text-red-400"><span class="w-2 h-2 bg-red-500 rounded-full"></span>{{ status.state }}</span>
-    {% endif %}
+    <div class="flex items-center gap-2 px-3 py-1.5 card">
+      {% if status.state == "RUNNING" %}<span class="status-dot running"></span><span class="text-xs font-mono" style="color:var(--success)">RUNNING</span>
+      {% elif status.state == "STOPPED" %}<span class="status-dot idle"></span><span class="text-xs font-mono" style="color:var(--text-muted)">STOPPED</span>
+      {% else %}<span class="status-dot fatal"></span><span class="text-xs font-mono" style="color:var(--danger)">{{ status.state }}</span>{% endif %}
+    </div>
   </div>
 </div>
 
 <!-- Control Buttons -->
-<div class="flex gap-2 mb-6">
-  <form method="POST" action="/svc/fruityblox-scraper/start"><button class="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white">▶ Start</button></form>
-  <form method="POST" action="/svc/fruityblox-scraper/stop"><button class="px-4 py-2 rounded-lg text-sm font-medium bg-red-600 hover:bg-red-700 text-white">⏹ Stop</button></form>
-  <form method="POST" action="/svc/fruityblox-scraper/restart"><button class="px-4 py-2 rounded-lg text-sm font-medium bg-yellow-600 hover:bg-yellow-700 text-white">↺ Restart</button></form>
-  <a href="/fruityblox" class="px-4 py-2 rounded-lg text-sm font-medium" style="background:var(--bg2);color:var(--text2)">🍎 Stock Monitor</a>
-  <a href="/fruityblox/config" class="px-4 py-2 rounded-lg text-sm font-medium" style="background:var(--bg2);color:var(--text2)">⚙️ Config</a>
+<div class="flex flex-wrap gap-2 mb-5">
+  <form method="POST" action="/svc/fruityblox-scraper/start"><button class="btn btn-success btn-sm"><i data-lucide="play" class="w-3.5 h-3.5"></i> Start</button></form>
+  <form method="POST" action="/svc/fruityblox-scraper/stop"><button class="btn btn-danger btn-sm"><i data-lucide="square" class="w-3.5 h-3.5"></i> Stop</button></form>
+  <form method="POST" action="/svc/fruityblox-scraper/restart"><button class="btn btn-ghost btn-sm"><i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i> Restart</button></form>
+  <a href="/fruityblox" class="btn btn-ghost btn-sm"><i data-lucide="bar-chart" class="w-3.5 h-3.5"></i> Stock</a>
+  <a href="/fruityblox/config" class="btn btn-ghost btn-sm"><i data-lucide="settings" class="w-3.5 h-3.5"></i> Config</a>
 </div>
 
 <!-- Tabs -->
-<div class="flex gap-1 mb-4 overflow-x-auto" style="border-bottom:1px solid var(--border)">
+<div class="flex gap-1 mb-5 overflow-x-auto" style="border-bottom:1px solid var(--border-subtle)">
   {% for t_id, t_label in [("overview","Overview"),("logs","Logs"),("stats","Stats")] %}
   <button class="tab-btn {% if active_tab==t_id %}active{% endif %}" data-tab-btn-group="m" data-tab-btn="{{ t_id }}" onclick="switchTab('m','{{ t_id }}')">{{ t_label }}</button>
   {% endfor %}
@@ -38,90 +40,75 @@
 
 <!-- OVERVIEW TAB -->
 <div class="tab-panel {% if active_tab=='overview' %}active{% endif %}" data-tab-group="m" data-tab="overview">
-  <div class="grid grid-cols-3 gap-3 mb-4">
-    <div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)">
-      <div class="text-[10px] mb-1" style="color:var(--text3)">Normal Stock</div>
-      <div class="text-2xl font-bold text-blue-400">{{ normal_stock|length }}</div>
-      <div class="text-[10px]" style="color:var(--text3)">fruits</div>
+  <div class="grid grid-cols-3 gap-3 mb-5">
+    <div class="card p-4">
+      <div class="text-[10px] font-mono uppercase tracking-wider mb-1" style="color:var(--text-muted)">Normal Stock</div>
+      <div class="text-2xl font-semibold tracking-tight font-mono" style="color:var(--accent)">{{ normal_stock|length }}</div>
+      <div class="text-[11px] mt-0.5" style="color:var(--text-muted)">fruits</div>
     </div>
-    <div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)">
-      <div class="text-[10px] mb-1" style="color:var(--text3)">Mirage Stock</div>
-      <div class="text-2xl font-bold text-purple-400">{{ mirage_stock|length }}</div>
-      <div class="text-[10px]" style="color:var(--text3)">fruits</div>
+    <div class="card p-4">
+      <div class="text-[10px] font-mono uppercase tracking-wider mb-1" style="color:var(--text-muted)">Mirage Stock</div>
+      <div class="text-2xl font-semibold tracking-tight font-mono" style="color:#a855f7">{{ mirage_stock|length }}</div>
+      <div class="text-[11px] mt-0.5" style="color:var(--text-muted)">fruits</div>
     </div>
-    <div class="rounded-xl p-3" style="background:var(--bg2);border:1px solid var(--border)">
-      <div class="text-[10px] mb-1" style="color:var(--text3)">Last Scrape</div>
-      <div class="text-sm font-bold">{{ last_scrape.finished_at[11:19] if last_scrape else 'N/A' }}</div>
-      <div class="text-[10px]" style="color:var(--text3)">{{ last_scrape.finished_at[:10] if last_scrape else '' }}</div>
+    <div class="card p-4">
+      <div class="text-[10px] font-mono uppercase tracking-wider mb-1" style="color:var(--text-muted)">Last Scrape</div>
+      <div class="text-base font-semibold tracking-tight font-mono">{{ last_scrape.finished_at[11:19] if last_scrape else 'N/A' }}</div>
+      <div class="text-[11px] mt-0.5 font-mono" style="color:var(--text-muted)">{{ last_scrape.finished_at[:10] if last_scrape else '' }}</div>
     </div>
   </div>
 
-  <!-- Normal Stock -->
-  <div class="rounded-xl p-4 mb-4" style="background:var(--bg2);border:1px solid var(--border)">
-    <h4 class="text-sm font-medium mb-3">🍎 Normal Stock</h4>
-    {% if normal_stock %}
+  {% set stocks_view = [
+    ('Normal Stock', normal_stock, 'package', 'var(--accent)', '🍎'),
+    ('Mirage Stock', mirage_stock, 'sparkles', '#a855f7', '✨')
+  ] %}
+  {% for title, stocks, icon, color, emoji in stocks_view %}
+  <div class="card p-5 mb-4">
+    <div class="flex items-center gap-2 mb-4">
+      <i data-lucide="{{ icon }}" class="w-4 h-4" style="color:{{ color }}"></i>
+      <h4 class="text-sm font-semibold tracking-tight">{{ title }}</h4>
+    </div>
+    {% if stocks %}
     <div class="space-y-2">
-      {% for fruit in normal_stock %}
-      {% set rarity_color = 'text-red-400' if fruit.rarity == 'mythical' else 'text-yellow-400' if fruit.rarity == 'legendary' else 'text-purple-400' if fruit.rarity == 'rare' else 'text-blue-400' if fruit.rarity == 'uncommon' else 'text-gray-400' %}
-      <div class="flex items-center justify-between py-1.5 px-3 rounded-lg" style="background:var(--bg3)">
-        <div>
+      {% for fruit in stocks %}
+      {% set rarity_color = '#f87171' if fruit.rarity == 'mythical' else '#fbbf24' if fruit.rarity == 'legendary' else '#a855f7' if fruit.rarity == 'rare' else '#3b82f6' if fruit.rarity == 'uncommon' else '#94a3b8' %}
+      <div class="flex items-center gap-3 py-2.5 px-3 rounded-lg" style="background:var(--bg-elevated);border:1px solid var(--border-subtle)">
+        <div class="text-xl flex-shrink-0">{{ emoji }}</div>
+        <div class="flex-1 min-w-0">
           <span class="text-sm font-medium">{{ fruit.fruit_name }}</span>
-          <span class="text-[10px] ml-2 {{ rarity_color }}">{{ fruit.rarity|title }}</span>
+          <span class="text-[10px] uppercase tracking-wider ml-2" style="color:{{ rarity_color }}">{{ fruit.rarity|title }}</span>
         </div>
-        <div class="text-right">
-          <span class="text-sm">💰 {{ "{:,}".format(fruit.price_beli) }}</span>
-          {% if fruit.price_robux %}<span class="text-xs ml-2" style="color:var(--text3)">💎 {{ fruit.price_robux }}</span>{% endif %}
+        <div class="text-right flex-shrink-0">
+          <div class="text-sm font-semibold font-mono">${{ "{:,}".format(fruit.price_beli) }}</div>
+          {% if fruit.price_robux %}<div class="text-[11px] font-mono" style="color:var(--text-muted)">R$ {{ fruit.price_robux }}</div>{% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
     {% else %}
-    <p class="text-sm" style="color:var(--text3)">No data yet.</p>
+    <p class="text-sm text-center py-6" style="color:var(--text-muted)">No data yet</p>
     {% endif %}
   </div>
-
-  <!-- Mirage Stock -->
-  <div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
-    <h4 class="text-sm font-medium mb-3">✨ Mirage Stock</h4>
-    {% if mirage_stock %}
-    <div class="space-y-2">
-      {% for fruit in mirage_stock %}
-      {% set rarity_color = 'text-red-400' if fruit.rarity == 'mythical' else 'text-yellow-400' if fruit.rarity == 'legendary' else 'text-purple-400' if fruit.rarity == 'rare' else 'text-blue-400' if fruit.rarity == 'uncommon' else 'text-gray-400' %}
-      <div class="flex items-center justify-between py-1.5 px-3 rounded-lg" style="background:var(--bg3)">
-        <div>
-          <span class="text-sm font-medium">{{ fruit.fruit_name }}</span>
-          <span class="text-[10px] ml-2 {{ rarity_color }}">{{ fruit.rarity|title }}</span>
-        </div>
-        <div class="text-right">
-          <span class="text-sm">💰 {{ "{:,}".format(fruit.price_beli) }}</span>
-          {% if fruit.price_robux %}<span class="text-xs ml-2" style="color:var(--text3)">💎 {{ fruit.price_robux }}</span>{% endif %}
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% else %}
-    <p class="text-sm" style="color:var(--text3)">No data yet.</p>
-    {% endif %}
-  </div>
+  {% endfor %}
 </div>
 
 <!-- LOGS TAB -->
 <div class="tab-panel {% if active_tab=='logs' %}active{% endif %}" data-tab-group="m" data-tab="logs">
   <div class="flex items-center justify-between mb-3">
-    <h4 class="text-xs" style="color:var(--text2)">Activity Log</h4>
-    <a href="/services/fruityblox?tab=logs" class="text-[10px] px-2 py-1 rounded" style="background:var(--bg3);color:var(--text2)">↻ Refresh</a>
+    <h4 class="text-sm font-semibold tracking-tight">Activity Log</h4>
+    <a href="/services/fruityblox?tab=logs" class="btn btn-ghost btn-sm"><i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i> Refresh</a>
   </div>
-  <div class="rounded-xl overflow-hidden" style="background:var(--bg2);border:1px solid var(--border)">
-    <div class="max-h-[500px] overflow-y-auto" id="log-box">
+  <div class="card overflow-hidden">
+    <div class="max-h-[500px] overflow-y-auto" id="log-box" style="background:#050912">
       {% if logs %}
       {% for line in logs %}
       {% set line = line.rstrip() %}
       {% if line %}
-      <div class="px-3 py-1 text-[11px] font-mono {% if 'ERROR' in line or '✗' in line %}text-red-400 bg-red-500/5{% elif 'WARNING' in line or '⚠' in line %}text-yellow-400 bg-yellow-500/5{% elif '✓' in line or 'success' in line.lower() %}text-emerald-400{% elif '🔄' in line %}text-blue-400{% else %}text-gray-300{% endif %}" style="border-bottom:1px solid var(--border)">{{ line }}</div>
+      <div class="px-4 py-1 text-[11px] font-mono {% if 'ERROR' in line or '✗' in line %}text-red-400 bg-red-500/5{% elif 'WARNING' in line or '⚠' in line %}text-yellow-400 bg-yellow-500/5{% elif '✓' in line or 'success' in line.lower() %}text-emerald-400{% elif '🔄' in line %}text-cyan-400{% else %}text-gray-300{% endif %}" style="border-bottom:1px solid var(--border-subtle)">{{ line }}</div>
       {% endif %}
       {% endfor %}
       {% else %}
-      <div class="p-4 text-sm text-center" style="color:var(--text3)">No logs yet.</div>
+      <div class="p-4 text-sm text-center" style="color:var(--text-muted)">No logs yet</div>
       {% endif %}
     </div>
   </div>
@@ -129,31 +116,34 @@
 
 <!-- STATS TAB -->
 <div class="tab-panel {% if active_tab=='stats' %}active{% endif %}" data-tab-group="m" data-tab="stats">
-  <div class="rounded-xl p-4" style="background:var(--bg2);border:1px solid var(--border)">
-    <h4 class="text-sm font-medium mb-3">Scrape Runs (7 days)</h4>
+  <div class="card p-5">
+    <div class="flex items-center gap-2 mb-4">
+      <i data-lucide="bar-chart-3" class="w-4 h-4" style="color:var(--accent)"></i>
+      <h4 class="text-sm font-semibold tracking-tight">Scrape Runs · 7 days</h4>
+    </div>
     {% if stats %}
-    <table class="w-full text-xs">
+    <table class="w-full text-sm">
       <thead>
-        <tr style="color:var(--text3)">
-          <th class="text-left py-1">Date</th>
-          <th class="text-center py-1">Runs</th>
-          <th class="text-center py-1">Success</th>
-          <th class="text-center py-1">New Rotations</th>
+        <tr style="border-bottom:1px solid var(--border-subtle)">
+          <th class="text-left py-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Date</th>
+          <th class="text-center py-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Runs</th>
+          <th class="text-center py-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">Success</th>
+          <th class="text-center py-2 text-[10px] font-mono uppercase tracking-wider font-medium" style="color:var(--text-muted)">New Rotations</th>
         </tr>
       </thead>
       <tbody>
         {% for row in stats %}
-        <tr style="border-top:1px solid var(--border)">
-          <td class="py-1.5">{{ row.date }}</td>
-          <td class="text-center py-1.5">{{ row.total_runs }}</td>
-          <td class="text-center py-1.5 text-emerald-400">{{ row.success_runs }}</td>
-          <td class="text-center py-1.5 text-blue-400">{{ row.new_rotations }}</td>
+        <tr style="border-bottom:1px solid var(--border-subtle)">
+          <td class="py-2 font-mono">{{ row.date }}</td>
+          <td class="text-center py-2 font-mono">{{ row.total_runs }}</td>
+          <td class="text-center py-2 font-mono text-emerald-400">{{ row.success_runs }}</td>
+          <td class="text-center py-2 font-mono" style="color:var(--accent)">{{ row.new_rotations }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% else %}
-    <p class="text-sm" style="color:var(--text3)">No stats yet.</p>
+    <p class="text-sm text-center py-6" style="color:var(--text-muted)">No stats yet</p>
     {% endif %}
   </div>
 </div>
@@ -161,7 +151,6 @@
 </div>
 
 <script>
-// Auto scroll logs to bottom
 const logBox = document.getElementById('log-box');
 if (logBox) logBox.scrollTop = logBox.scrollHeight;
 </script>

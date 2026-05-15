@@ -1,137 +1,142 @@
 {% extends "base.html" %}{% block title %}{{ title or "Anime Player" }}{% endblock %}
 {% block head %}
 <style>
-.player-container{position:relative;width:100%;padding-bottom:56.25%;background:#000;border-radius:.75rem;overflow:hidden}
+.player-container{position:relative;width:100%;padding-bottom:56.25%;background:#000;border-radius:14px;overflow:hidden;border:1px solid var(--border-default)}
 .player-container iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none}
-.quality-btn{transition:all .15s}
-.quality-btn.active{background:#6366f1!important;color:#fff!important;border-color:#6366f1!important}
-.mirror-btn{transition:all .15s}
-.mirror-btn.active{background:#10b981!important;color:#fff!important;border-color:#10b981!important}
-.ep-item{transition:all .1s}
-.ep-item:hover{background:var(--bg3)}
-.ep-item.current{background:rgba(99,102,241,0.15);border-left:3px solid #6366f1}
+.quality-btn,.mirror-btn{transition:all .15s}
+.quality-btn.active{background:var(--accent)!important;color:#0a0f1a!important;border-color:var(--accent)!important;box-shadow:var(--accent-glow)}
+.mirror-btn.active{background:#10b981!important;color:#0a0f1a!important;border-color:#10b981!important}
 </style>
 {% endblock %}
 {% block content %}
 
 {% if error %}
-<div class="mb-4 p-4 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">{{ error }}</div>
-<a href="/anime" class="text-indigo-400 text-sm hover:underline">← Kembali ke Anime</a>
+<div class="card p-4 mb-4" style="background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.3);color:#f87171">
+  <div class="flex items-center gap-2 text-sm"><i data-lucide="alert-circle" class="w-4 h-4"></i>{{ error }}</div>
+</div>
+<a href="/anime" class="btn btn-ghost btn-sm"><i data-lucide="arrow-left" class="w-3.5 h-3.5"></i> Kembali ke Anime</a>
 {% else %}
 
-<!-- Player Header -->
-<div class="flex items-center gap-2 mb-3">
-<a href="/anime" class="text-gray-500 hover:text-gray-300 text-sm">Anime</a>
-<span class="text-gray-600 text-xs">/</span>
-{% if anime_url %}
-<a href="/anime/detail?url={{ anime_url }}" class="text-gray-500 hover:text-gray-300 text-sm truncate max-w-[200px]">{{ anime_title or "Detail" }}</a>
-<span class="text-gray-600 text-xs">/</span>
-{% endif %}
-<span class="text-gray-300 text-sm truncate">{{ title }}</span>
+<!-- Breadcrumb -->
+<div class="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider mb-3" style="color:var(--text-muted)">
+  <a href="/anime" class="hover:text-[var(--accent)]">Anime</a>
+  <i data-lucide="chevron-right" class="w-3 h-3"></i>
+  {% if anime_url %}
+  <a href="/anime/detail?url={{ anime_url }}" class="hover:text-[var(--accent)] truncate max-w-[240px]">{{ anime_title or "Detail" }}</a>
+  <i data-lucide="chevron-right" class="w-3 h-3"></i>
+  {% endif %}
+  <span style="color:var(--text-secondary)" class="truncate">{{ title }}</span>
 </div>
 
-<h2 class="text-base sm:text-lg font-bold text-white mb-3">🎬 {{ title }}</h2>
+<h1 class="text-lg md:text-xl font-semibold tracking-tight mb-4 flex items-center gap-2">
+  <i data-lucide="play-circle" class="w-5 h-5" style="color:var(--accent)"></i>
+  {{ title }}
+</h1>
 
 <!-- Video Player -->
-<div class="player-container mb-3" id="player-wrap">
+<div class="player-container mb-4" id="player-wrap">
 {% if iframe_url %}
 <iframe id="video-frame" src="{{ iframe_url }}" allowfullscreen sandbox="allow-scripts allow-pointer-lock allow-forms allow-same-origin allow-fullscreen allow-orientation-lock"></iframe>
 {% else %}
-<div class="absolute inset-0 flex items-center justify-center text-gray-500">
-<div class="text-center">
-<div class="text-4xl mb-2">🎬</div>
-<div class="text-sm">Pilih mirror untuk mulai menonton</div>
-</div>
+<div class="absolute inset-0 flex items-center justify-center" style="color:var(--text-muted)">
+  <div class="text-center">
+    <i data-lucide="film" class="w-10 h-10 mx-auto mb-2"></i>
+    <div class="text-sm">Pilih mirror untuk mulai menonton</div>
+  </div>
 </div>
 {% endif %}
 </div>
 
 <!-- Quality & Mirror Selector -->
 {% if mirrors %}
-<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 sm:p-4 mb-3">
-<div class="text-xs font-medium text-gray-300 mb-2">🎞️ Kualitas & Server</div>
+<div class="card p-4 mb-4">
+  <div class="flex items-center gap-2 mb-3">
+    <i data-lucide="settings-2" class="w-4 h-4" style="color:var(--accent)"></i>
+    <h3 class="text-sm font-semibold tracking-tight">Kualitas & Server</h3>
+  </div>
 
-<!-- Quality Tabs -->
-<div class="flex flex-wrap gap-2 mb-3">
-{% for quality in mirrors.keys() %}
-<button class="quality-btn px-3 py-1.5 text-xs rounded-lg border border-gray-700 text-gray-400 {% if loop.first %}active{% endif %}"
-        onclick="switchQuality('{{ quality }}')">{{ quality }}</button>
-{% endfor %}
-</div>
+  <!-- Quality Tabs -->
+  <div class="flex flex-wrap gap-2 mb-3">
+    {% for quality in mirrors.keys() %}
+    <button class="quality-btn px-3 py-1.5 text-xs rounded-md font-medium {% if loop.first %}active{% endif %}"
+            style="border:1px solid var(--border-default);color:var(--text-secondary);background:var(--bg-elevated)"
+            onclick="switchQuality('{{ quality }}', event)">{{ quality }}</button>
+    {% endfor %}
+  </div>
 
-<!-- Mirror Buttons (per quality) -->
-{% for quality, mirror_list in mirrors.items() %}
-<div class="mirror-group {% if not loop.first %}hidden{% endif %}" data-quality="{{ quality }}">
-<div class="flex flex-wrap gap-2">
-{% for m in mirror_list %}
-<button class="mirror-btn px-3 py-1.5 text-xs rounded-lg border border-gray-700 text-gray-400 {% if m.default %}active{% endif %}"
-        onclick="switchMirror('{{ m.data_content }}', this)"
-        data-content="{{ m.data_content }}">
-{{ m.server }}{% if m.default %} ✓{% endif %}
-</button>
-{% endfor %}
-</div>
-</div>
-{% endfor %}
+  {% for quality, mirror_list in mirrors.items() %}
+  <div class="mirror-group {% if not loop.first %}hidden{% endif %}" data-quality="{{ quality }}">
+    <div class="text-[10px] font-mono uppercase tracking-wider mb-2" style="color:var(--text-muted)">Server</div>
+    <div class="flex flex-wrap gap-2">
+      {% for m in mirror_list %}
+      <button class="mirror-btn px-3 py-1.5 text-xs rounded-md font-medium {% if m.default %}active{% endif %}"
+              style="border:1px solid var(--border-default);color:var(--text-secondary);background:var(--bg-elevated)"
+              onclick="switchMirror('{{ m.data_content }}', this)"
+              data-content="{{ m.data_content }}">
+        {{ m.server }}{% if m.default %} ✓{% endif %}
+      </button>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
 </div>
 {% endif %}
 
 <!-- Navigation -->
-<div class="flex items-center justify-between mb-4">
+<div class="flex items-center justify-between gap-2 mb-4">
 {% if prev_url %}
-<a href="/watch?url={{ prev_url }}" class="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs rounded-lg">← Prev Episode</a>
-{% else %}
-<div></div>
-{% endif %}
+<a href="/watch?url={{ prev_url }}" class="btn btn-ghost btn-sm"><i data-lucide="chevron-left" class="w-3.5 h-3.5"></i> Prev</a>
+{% else %}<div></div>{% endif %}
 
 {% if all_episodes_url %}
-<a href="/anime/detail?url={{ all_episodes_url }}" class="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded-lg">📋 All Episodes</a>
+<a href="/anime/detail?url={{ all_episodes_url }}" class="btn btn-primary btn-sm"><i data-lucide="list" class="w-3.5 h-3.5"></i> All Episodes</a>
 {% endif %}
 
 {% if next_url %}
-<a href="/watch?url={{ next_url }}" class="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs rounded-lg">Next Episode →</a>
-{% else %}
-<div></div>
-{% endif %}
+<a href="/watch?url={{ next_url }}" class="btn btn-ghost btn-sm">Next <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i></a>
+{% else %}<div></div>{% endif %}
 </div>
 
 <!-- Download Links -->
 {% if downloads %}
-<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 sm:p-4 mb-4">
-<div class="text-xs font-medium text-gray-300 mb-3">📥 Download</div>
-<div class="space-y-2">
-{% for dl in downloads %}
-<div class="flex flex-wrap items-center gap-2 py-1.5 border-b border-gray-800/50 last:border-0">
-<span class="text-[10px] font-medium text-white bg-gray-700 px-2 py-0.5 rounded min-w-[70px] text-center">{{ dl.quality }}</span>
-<span class="text-[9px] text-gray-500">{{ dl.size }}</span>
-<div class="flex flex-wrap gap-1 ml-auto">
-{% for link in dl.links %}
-<a href="{{ link.url }}" target="_blank" rel="noopener" class="px-2 py-0.5 text-[10px] bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded border border-gray-700">{{ link.host }}</a>
-{% endfor %}
-</div>
-</div>
-{% endfor %}
-</div>
+<div class="card p-4 mb-4">
+  <div class="flex items-center gap-2 mb-3">
+    <i data-lucide="download" class="w-4 h-4" style="color:var(--accent)"></i>
+    <h3 class="text-sm font-semibold tracking-tight">Download</h3>
+  </div>
+  <div class="space-y-2">
+    {% for dl in downloads %}
+    <div class="flex flex-wrap items-center gap-2 py-2" style="border-bottom:1px solid var(--border-subtle)">
+      <span class="badge badge-accent" style="min-width:70px;justify-content:center">{{ dl.quality }}</span>
+      <span class="text-[11px] font-mono" style="color:var(--text-muted)">{{ dl.size }}</span>
+      <div class="flex flex-wrap gap-1 ml-auto">
+        {% for link in dl.links %}
+        <a href="{{ link.url }}" target="_blank" rel="noopener" class="text-[11px] px-2 py-0.5 rounded-md hover:text-[var(--accent)]" style="background:var(--bg-elevated);border:1px solid var(--border-subtle);color:var(--text-secondary)">{{ link.host }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
 </div>
 {% endif %}
 
 <!-- Episode Info -->
 {% if anime_info %}
-<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 sm:p-4">
-<div class="flex gap-3">
-{% if anime_info.image %}
-<img src="{{ anime_info.image }}" class="w-16 h-22 object-cover rounded-lg flex-shrink-0" alt="">
-{% endif %}
-<div class="min-w-0">
-<div class="text-sm font-medium text-white">{{ anime_info.title or anime_title }}</div>
-<div class="text-[10px] text-gray-500 mt-1">
-{{ anime_info.type or "" }} • {{ anime_info.status or "" }} • ⭐ {{ anime_info.score or "-" }}
-</div>
-{% if anime_info.genres %}
-<div class="text-[10px] text-gray-600 mt-1">{{ anime_info.genres | join(", ") }}</div>
-{% endif %}
-</div>
-</div>
+<div class="card p-4">
+  <div class="flex gap-3">
+    {% if anime_info.image %}
+    <img src="{{ anime_info.image }}" class="w-16 h-22 object-cover rounded-md flex-shrink-0" alt="">
+    {% endif %}
+    <div class="min-w-0">
+      <div class="text-sm font-semibold tracking-tight">{{ anime_info.title or anime_title }}</div>
+      <div class="text-[11px] mt-1 font-mono" style="color:var(--text-muted)">
+        {{ anime_info.type or "" }} · {{ anime_info.status or "" }} · ★ {{ anime_info.score or "-" }}
+      </div>
+      {% if anime_info.genres %}
+      <div class="text-[11px] mt-1" style="color:var(--text-muted)">{{ anime_info.genres | join(", ") }}</div>
+      {% endif %}
+    </div>
+  </div>
 </div>
 {% endif %}
 
@@ -143,7 +148,6 @@ const mirrorAction = "{{ mirror_action }}";
 const ajaxUrl = "{{ ajax_url }}";
 let nonce = "";
 
-// Get nonce on page load
 async function getNonce(){
   if(!nonceAction || !ajaxUrl) return;
   try{
@@ -155,16 +159,15 @@ async function getNonce(){
   }catch(e){console.log('Nonce error:', e)}
 }
 
-function switchQuality(q){
+function switchQuality(q, ev){
   document.querySelectorAll('.quality-btn').forEach(b=>b.classList.remove('active'));
-  event.target.classList.add('active');
+  ev.target.classList.add('active');
   document.querySelectorAll('.mirror-group').forEach(g=>g.classList.add('hidden'));
   const group = document.querySelector(`.mirror-group[data-quality="${q}"]`);
   if(group) group.classList.remove('hidden');
 }
 
 async function switchMirror(dataContent, btn){
-  // Update active state
   const parent = btn.closest('.mirror-group');
   parent.querySelectorAll('.mirror-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
@@ -187,7 +190,6 @@ async function switchMirror(dataContent, btn){
     if(d.data){
       const html = atob(d.data);
       document.getElementById('player-wrap').innerHTML = html;
-      // Make iframe responsive
       const iframe = document.querySelector('#player-wrap iframe');
       if(iframe){
         iframe.style.position='absolute';
@@ -201,7 +203,6 @@ async function switchMirror(dataContent, btn){
     }
   }catch(e){
     console.log('Mirror switch error:', e);
-    // Fallback: try proxy through our server
     try{
       const r2 = await fetch('/api/anime/mirror', {
         method:'POST',
@@ -210,14 +211,13 @@ async function switchMirror(dataContent, btn){
       });
       const d2 = await r2.json();
       if(d2.iframe_url){
-        document.getElementById('player-wrap').innerHTML = 
+        document.getElementById('player-wrap').innerHTML =
           `<iframe src="${d2.iframe_url}" allowfullscreen style="position:absolute;top:0;left:0;width:100%;height:100%;border:none" sandbox="allow-scripts allow-pointer-lock allow-forms allow-same-origin allow-fullscreen allow-orientation-lock"></iframe>`;
       }
     }catch(e2){}
   }
 }
 
-// Init
 getNonce();
 </script>
 {% endblock %}
