@@ -610,16 +610,43 @@ async def main():
 
 # ── Loop ────────────────────────────────────────────────
 async def run_loop():
+    """Main loop with exponential backoff retry on failure.
+
+    Strategy:
+    - On success: wait full interval (e.g., 30 min)
+    - On failure: retry with backoff 60s -> 120s -> 240s before next interval
+    - Max 3 fast retries to avoid hammering the source if it's truly down
+    """
+    BACKOFF_SCHEDULE = [60, 120, 240]  # seconds
+    fail_count = 0
     while True:
         try:
             config = load_config()
             interval = config.get("scraper", {}).get("interval_minutes", 30)
             await main()
+            # Success: reset retry counter, wait full interval
+            if fail_count > 0:
+                logger.info(f"✓ Recovered after {fail_count} retry attempt(s)")
+            fail_count = 0
             logger.info(f"Next scrape in {interval} minutes...")
             await asyncio.sleep(interval * 60)
         except Exception as e:
             logger.error(f"Scrape error: {e}", exc_info=True)
-            await asyncio.sleep(60)
+            if fail_count < len(BACKOFF_SCHEDULE):
+                wait_s = BACKOFF_SCHEDULE[fail_count]
+                fail_count += 1
+                logger.warning(f"⚠ Retry {fail_count}/{len(BACKOFF_SCHEDULE)} in {wait_s}s (exponential backoff)")
+                await asyncio.sleep(wait_s)
+            else:
+                # Exhausted retries — fall back to normal interval to avoid hammering
+                fail_count = 0
+                logger.error(f"✗ Max retries reached, waiting full interval before next attempt")
+                try:
+                    config = load_config()
+                    interval = config.get("scraper", {}).get("interval_minutes", 30)
+                except Exception:
+                    interval = 30
+                await asyncio.sleep(interval * 60)
 
 
 if __name__ == "__main__":

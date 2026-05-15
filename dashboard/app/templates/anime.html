@@ -1,107 +1,132 @@
-{% extends "base.html" %}{% block title %}Anime{% endblock %}
+{% extends "base.html" %}
+{% block title %}Anime{% endblock %}
 {% block content %}
-<div class="flex items-center justify-between mb-1">
-<h2 class="text-lg sm:text-xl font-bold text-white">🎬 Ongoing Anime</h2>
-<div class="flex gap-2 items-center">
-<span class="text-[10px] text-gray-500 hidden sm:inline">{{ total_anime }} anime • {{ total_episodes }} eps • ⭐ {{ total_bookmarked }} bookmark</span>
+
+<!-- Header -->
+<div class="flex items-center justify-between mb-5 fade-in">
+  <div>
+    <div class="flex items-center gap-2 mb-2">
+      <i data-lucide="tv" class="w-4 h-4" style="color:var(--accent)"></i>
+      <span class="text-xs font-mono uppercase tracking-wider" style="color:var(--accent)">Otakudesu</span>
+    </div>
+    <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">Ongoing Anime</h1>
+    <p class="text-sm mt-1" style="color:var(--text-secondary)">Bookmark = watchlist notifikasi Discord</p>
+  </div>
+  <div class="hidden md:flex flex-col items-end gap-1 text-[11px] font-mono" style="color:var(--text-muted)">
+    <span><span class="font-semibold" style="color:var(--text-primary)">{{ total_anime }}</span> anime</span>
+    <span><span class="font-semibold" style="color:var(--text-primary)">{{ total_episodes }}</span> episodes</span>
+    <span class="flex items-center gap-1"><i data-lucide="bookmark" class="w-3 h-3"></i> {{ total_bookmarked }}</span>
+  </div>
 </div>
-</div>
-<p class="text-gray-500 text-xs mb-3">Anime ongoing dari Otakudesu — bookmark = watchlist notifikasi Discord</p>
 
 <!-- Scrape Info Bar -->
-<div class="bg-gray-900 border border-gray-800 rounded-xl p-3 mb-4">
-<div class="flex flex-wrap items-center gap-3 text-[10px]">
-<div class="flex items-center gap-1.5">
-<span class="text-gray-500">🕐</span>
-<span class="text-gray-300 font-mono" id="server-clock">{{ server_time }}</span>
-</div>
-{% if scrape_info %}
-<div class="text-gray-700">|</div>
-<div class="flex items-center gap-1.5">
-<div class="w-2 h-2 bg-emerald-500 rounded-full pg"></div>
-<span class="text-gray-400">Scraper aktif</span>
-</div>
-<div class="text-gray-700">|</div>
-<div><span class="text-gray-500">Last:</span> <span class="text-gray-300">{{ last_scrape_time }}</span></div>
-<div class="text-gray-700">|</div>
-<div><span class="text-gray-500">Durasi:</span> <span class="text-gray-300">{{ "%.1f"|format(scrape_duration) }}s</span></div>
-<div class="text-gray-700">|</div>
-<div><span class="text-gray-500">Next scrape:</span> <span class="text-indigo-400 font-medium font-mono" id="next-scrape">{{ next_scrape }}</span></div>
-<div class="text-gray-700">|</div>
-<div><span class="text-gray-500">Result:</span> <span class="text-gray-300">{{ scrape_info.total_komik }} anime, {{ scrape_info.new_updates }} baru</span></div>
-{% else %}
-<div class="text-gray-700">|</div>
-<span class="text-gray-500">Menunggu scrape pertama...</span>
-{% endif %}
-</div>
+<div class="card p-3 mb-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono" style="color:var(--text-muted)">
+  <div class="flex items-center gap-1.5">
+    <i data-lucide="clock" class="w-3 h-3"></i>
+    <span style="color:var(--text-secondary)" id="server-clock">{{ server_time }}</span>
+  </div>
+  {% if scrape_info %}
+  <div style="color:var(--border-strong)">·</div>
+  <div class="flex items-center gap-1.5">
+    <span class="status-dot running"></span>
+    <span>Scraper aktif</span>
+  </div>
+  <div style="color:var(--border-strong)">·</div>
+  <span>Last <span style="color:var(--text-secondary)">{{ last_scrape_time }}</span></span>
+  <div style="color:var(--border-strong)">·</div>
+  <span>Durasi <span style="color:var(--text-secondary)">{{ "%.1f"|format(scrape_duration) }}s</span></span>
+  <div style="color:var(--border-strong)">·</div>
+  <span>Next <span style="color:var(--accent)" id="next-scrape">{{ next_scrape }}</span></span>
+  <div style="color:var(--border-strong)">·</div>
+  <span>{{ scrape_info.total_komik }} anime · {{ scrape_info.new_updates }} baru</span>
+  {% else %}
+  <div style="color:var(--border-strong)">·</div>
+  <span>Menunggu scrape pertama...</span>
+  {% endif %}
 </div>
 
 <!-- Filter & Search -->
-<div class="flex flex-col sm:flex-row gap-2 mb-4">
-<input type="text" id="anime-search" placeholder="Cari anime..." 
-       class="flex-1 px-3 py-2 bg-gray-900 border border-gray-800 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500"
-       oninput="filterAnime()">
-<div class="flex gap-2">
-<button onclick="filterBookmarked()" id="btn-bookmarked" class="px-3 py-2 bg-gray-900 border border-gray-800 hover:border-amber-500/50 text-xs text-gray-400 rounded-lg">⭐ Bookmarked</button>
-<button onclick="filterAll()" id="btn-all" class="px-3 py-2 bg-indigo-600/20 border border-indigo-500/50 text-xs text-indigo-400 rounded-lg">All</button>
-</div>
+<div class="flex flex-col sm:flex-row gap-2 mb-5">
+  <div class="relative flex-1">
+    <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2" style="color:var(--text-muted)"></i>
+    <input type="text" id="anime-search" placeholder="Cari anime..." class="input pl-9" oninput="filterAnime()">
+  </div>
+  <div class="flex gap-2">
+    <button onclick="filterAll()" id="btn-all" class="btn btn-primary btn-sm">
+      <i data-lucide="grid" class="w-3.5 h-3.5"></i> All
+    </button>
+    <button onclick="filterBookmarked()" id="btn-bookmarked" class="btn btn-ghost btn-sm">
+      <i data-lucide="bookmark" class="w-3.5 h-3.5"></i> Bookmarked
+    </button>
+  </div>
 </div>
 
 <!-- Anime Grid -->
-<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3" id="anime-grid">
+<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3" id="anime-grid">
 {% for a in anime_list %}
-<div class="anime-card bg-gray-900 border border-gray-800 rounded-xl overflow-hidden hover:border-indigo-500/50 transition-colors"
+<div class="anime-card card overflow-hidden hover:border-[var(--accent)] transition-all hover:shadow-[var(--accent-glow)]"
      data-title="{{ a.title|lower }}" data-bookmarked="{{ '1' if a.bookmarked else '0' }}" data-id="{{ a.id }}">
-<div class="relative cursor-pointer" onclick="showAnimeDetail({{ a.id }})">
-<img src="{{ a.image }}" alt="{{ a.title }}" class="w-full h-44 sm:h-52 object-cover" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 140%22><rect fill=%22%231f2937%22 width=%22100%22 height=%22140%22/><text x=%2250%22 y=%2270%22 text-anchor=%22middle%22 fill=%22%234b5563%22 font-size=%2212%22>No Image</text></svg>'">
-<!-- Episode badge -->
-<div class="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-indigo-600/90 text-white text-[9px] rounded font-medium">
-{{ a.last_episode or "?" }}
-</div>
-<!-- Bookmark badge -->
-{% if a.bookmarked %}
-<div class="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-amber-500/90 text-white text-[9px] rounded">⭐</div>
-{% endif %}
-<!-- Day badge -->
-{% if a.day and not a.bookmarked %}
-<div class="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-black/70 text-gray-300 text-[9px] rounded">{{ a.day }}</div>
-{% endif %}
-<!-- Score -->
-{% if a.score %}
-<div class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 bg-amber-500/90 text-white text-[9px] rounded font-medium">⭐ {{ a.score }}</div>
-{% endif %}
-<!-- No episodes warning -->
-{% if a.ep_count == 0 %}
-<div class="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 bg-red-500/80 text-white text-[9px] rounded">No eps</div>
-{% endif %}
-</div>
-<div class="p-2">
-<h3 class="text-[11px] font-medium text-white line-clamp-2 leading-tight mb-1">{{ a.title }}</h3>
-<div class="flex items-center justify-between">
-<span class="text-[9px] text-gray-500">{{ a.type }} • {{ a.ep_count }} eps</span>
-<button onclick="toggleBookmark({{ a.id }}, this, event)" class="text-sm hover:scale-125 transition-transform" title="Bookmark">
-{{ "⭐" if a.bookmarked else "☆" }}
-</button>
-</div>
-</div>
+  <div class="relative cursor-pointer aspect-[2/3]" onclick="showAnimeDetail({{ a.id }})">
+    <img src="{{ a.image }}" alt="{{ a.title }}" class="w-full h-full object-cover" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 140%22><rect fill=%22%231a2032%22 width=%22100%22 height=%22140%22/><text x=%2250%22 y=%2270%22 text-anchor=%22middle%22 fill=%22%2364748b%22 font-size=%2210%22>No Image</text></svg>'">
+    <!-- Gradient overlay -->
+    <div class="absolute inset-0" style="background:linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.85) 100%)"></div>
+    <!-- Top badges -->
+    <div class="absolute top-2 left-2 flex gap-1">
+      <span class="badge badge-accent">{{ a.last_episode or "?" }}</span>
+    </div>
+    <div class="absolute top-2 right-2">
+      {% if a.bookmarked %}
+      <span class="badge" style="background:rgba(245,158,11,0.9);color:#0a0f1a"><i data-lucide="bookmark" class="w-3 h-3"></i></span>
+      {% elif a.day %}
+      <span class="badge badge-muted" style="background:rgba(0,0,0,0.7)">{{ a.day }}</span>
+      {% endif %}
+    </div>
+    <!-- Bottom badges -->
+    {% if a.score %}
+    <div class="absolute bottom-2 right-2">
+      <span class="badge" style="background:rgba(245,158,11,0.9);color:#0a0f1a">★ {{ a.score }}</span>
+    </div>
+    {% endif %}
+    {% if a.ep_count == 0 %}
+    <div class="absolute bottom-2 left-2">
+      <span class="badge badge-danger">No eps</span>
+    </div>
+    {% endif %}
+  </div>
+  <div class="p-2.5">
+    <h3 class="text-xs font-medium leading-snug line-clamp-2 mb-1.5">{{ a.title }}</h3>
+    <div class="flex items-center justify-between">
+      <span class="text-[10px] font-mono" style="color:var(--text-muted)">{{ a.type }} · {{ a.ep_count }}ep</span>
+      <button onclick="toggleBookmark({{ a.id }}, this, event)" class="hover:scale-125 transition-transform" title="Bookmark">
+        <i data-lucide="{{ 'bookmark-check' if a.bookmarked else 'bookmark' }}" class="w-3.5 h-3.5" style="color:{{ '#fbbf24' if a.bookmarked else 'var(--text-muted)' }}"></i>
+      </button>
+    </div>
+  </div>
 </div>
 {% endfor %}
 </div>
 
 {% if not anime_list %}
-<div class="bg-gray-900 border border-gray-800 border-dashed rounded-xl p-8 text-center">
-<div class="text-3xl mb-2">🎬</div>
-<p class="text-gray-500 text-sm">Belum ada data anime. Tunggu scraper selesai.</p>
+<div class="card p-12 text-center" style="border-style:dashed">
+  <i data-lucide="tv" class="w-12 h-12 mx-auto mb-3" style="color:var(--text-muted)"></i>
+  <p class="text-sm" style="color:var(--text-secondary)">Belum ada data anime.</p>
+  <p class="text-xs mt-1" style="color:var(--text-muted)">Tunggu scraper selesai mengumpulkan data.</p>
 </div>
 {% endif %}
 
 <!-- Anime Detail Modal -->
 <div id="anime-modal" class="fixed inset-0 z-50 hidden" onclick="if(event.target===this)closeAnimeModal()">
-<div class="absolute inset-0 bg-black/60"></div>
-<div class="relative mx-auto mt-10 sm:mt-16 w-[95%] max-w-2xl max-h-[80vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-5" id="anime-modal-content">
-<button onclick="closeAnimeModal()" class="absolute top-3 right-3 text-gray-500 hover:text-white text-lg">✕</button>
-<div id="anime-modal-body">Loading...</div>
-</div>
+  <div class="absolute inset-0" style="background:rgba(0,0,0,0.7);backdrop-filter:blur(4px)"></div>
+  <div class="relative mx-auto mt-10 sm:mt-16 w-[95%] max-w-2xl max-h-[80vh] overflow-y-auto card p-5 slide-up" id="anime-modal-content">
+    <button onclick="closeAnimeModal()" class="absolute top-3 right-3 p-1 rounded hover:bg-[var(--bg-elevated)]" style="color:var(--text-muted)">
+      <i data-lucide="x" class="w-4 h-4"></i>
+    </button>
+    <div id="anime-modal-body">
+      <div class="flex items-center justify-center py-12">
+        <div class="w-6 h-6 rounded-full border-2 animate-spin" style="border-color:var(--accent);border-right-color:transparent"></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -118,15 +143,17 @@ function filterAnime(){
 
 function filterBookmarked(){
   showBookmarkedOnly = true;
-  document.getElementById('btn-bookmarked').className = 'px-3 py-2 bg-amber-600/20 border border-amber-500/50 text-xs text-amber-400 rounded-lg';
-  document.getElementById('btn-all').className = 'px-3 py-2 bg-gray-900 border border-gray-800 hover:border-indigo-500/50 text-xs text-gray-400 rounded-lg';
+  document.getElementById('btn-bookmarked').className = 'btn btn-primary btn-sm';
+  document.getElementById('btn-all').className = 'btn btn-ghost btn-sm';
+  if (window.lucide) lucide.createIcons();
   filterAnime();
 }
 
 function filterAll(){
   showBookmarkedOnly = false;
-  document.getElementById('btn-all').className = 'px-3 py-2 bg-indigo-600/20 border border-indigo-500/50 text-xs text-indigo-400 rounded-lg';
-  document.getElementById('btn-bookmarked').className = 'px-3 py-2 bg-gray-900 border border-gray-800 hover:border-amber-500/50 text-xs text-gray-400 rounded-lg';
+  document.getElementById('btn-all').className = 'btn btn-primary btn-sm';
+  document.getElementById('btn-bookmarked').className = 'btn btn-ghost btn-sm';
+  if (window.lucide) lucide.createIcons();
   filterAnime();
 }
 
@@ -142,91 +169,176 @@ async function toggleBookmark(id, btn, e){
   const d = await r.json();
   if(d.ok){
     card.dataset.bookmarked = d.bookmarked ? '1' : '0';
-    btn.textContent = d.bookmarked ? '⭐' : '☆';
-    // Update badge
-    const badges = card.querySelector('.relative');
-    const existingBadge = badges.querySelector('[class*="bg-amber-500"]');
-    if(d.bookmarked && !existingBadge){
-      const badge = document.createElement('div');
-      badge.className = 'absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-amber-500/90 text-white text-[9px] rounded';
-      badge.textContent = '⭐';
-      badges.appendChild(badge);
-    } else if(!d.bookmarked && existingBadge){
-      existingBadge.remove();
-    }
+    btn.innerHTML = `<i data-lucide="${d.bookmarked ? 'bookmark-check' : 'bookmark'}" class="w-3.5 h-3.5" style="color:${d.bookmarked ? '#fbbf24' : 'var(--text-muted)'}"></i>`;
+    if (window.lucide) lucide.createIcons();
     filterAnime();
+    if (window.toast) window.toast(d.bookmarked ? 'Bookmark ditambahkan' : 'Bookmark dihapus', d.bookmarked ? 'success' : 'info');
+  } else if (window.toast) {
+    window.toast('Gagal update bookmark', 'error');
   }
 }
 
 async function showAnimeDetail(id){
   document.getElementById('anime-modal').classList.remove('hidden');
-  document.getElementById('anime-modal-body').innerHTML = '<div class="text-center py-8 text-gray-500">Loading...</div>';
+  document.getElementById('anime-modal-body').innerHTML = '<div class="flex items-center justify-center py-12"><div class="w-6 h-6 rounded-full border-2 animate-spin" style="border-color:var(--accent);border-right-color:transparent"></div></div>';
   try{
     const r = await fetch(`/api/anime/${id}`);
     const d = await r.json();
     if(d.error){
-      document.getElementById('anime-modal-body').innerHTML = `<div class="text-red-400">${d.error}</div>`;
+      document.getElementById('anime-modal-body').innerHTML = `<div class="text-red-400 p-4">${d.error}</div>`;
       return;
     }
-    let genres = (d.genres||[]).map(g=>`<span class="px-1.5 py-0.5 bg-gray-800 rounded text-[9px] text-gray-400">${g}</span>`).join(' ');
-    let eps = (d.episodes||[]).map((ep,i)=>`
-      <div class="ep-item flex items-center justify-between py-1.5 px-2 rounded ${i===d.episodes.length-1?'border-l-2 border-indigo-500 bg-indigo-500/5':''}">
-        <div class="flex items-center gap-1.5 min-w-0 flex-1">
-          <span class="text-[10px] ${ep.watched?'text-emerald-500':'text-gray-600'}">${ep.watched?'✓':'○'}</span>
-          <a href="/watch?url=${encodeURIComponent(ep.url)}" class="text-[11px] ${ep.watched?'text-gray-500 line-through':'text-indigo-400 hover:text-indigo-300'} truncate">${ep.text}</a>
-        </div>
-        <span class="text-[9px] text-gray-600 ml-2 flex-shrink-0">${ep.date||''}</span>
-      </div>
-    `).reverse().join('');
 
+    // Status badge color
+    const statusColor = (d.status||'').toLowerCase().includes('ongoing') ? '#10b981' :
+                        (d.status||'').toLowerCase().includes('complete') ? '#3b82f6' : '#94a3b8';
+
+    // Genre chips with accent muted background
+    const genres = (d.genres||[]).map(g =>
+      `<span class="inline-flex items-center text-[11px] font-medium px-2.5 py-1 rounded-full"
+             style="background:var(--accent-muted);color:var(--accent);border:1px solid rgba(6,182,212,0.25)">${g}</span>`
+    ).join('');
+
+    // Episode rows with NEW badge for latest
+    const totalEps = (d.episodes||[]).length;
+    const eps = (d.episodes||[]).map((ep,i) => {
+      const isLatest = i === totalEps - 1;
+      return `
+      <div class="flex items-center justify-between gap-2 py-2 px-3 rounded-md transition-colors ${ep.watched?'opacity-50':''}"
+           style="${isLatest?'background:linear-gradient(90deg, var(--accent-muted), transparent);border-left:2px solid var(--accent)':'border-left:2px solid transparent'}">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <i data-lucide="${ep.watched?'check-circle-2':isLatest?'sparkles':'circle'}" class="w-3.5 h-3.5 flex-shrink-0" style="color:${ep.watched?'#10b981':isLatest?'var(--accent)':'var(--text-muted)'}"></i>
+          <a href="/watch?url=${encodeURIComponent(ep.url)}" class="text-xs ${ep.watched?'line-through':''} truncate font-medium" style="color:${ep.watched?'var(--text-muted)':isLatest?'var(--text-primary)':'var(--accent)'}">${ep.text}</a>
+          ${isLatest && !ep.watched ? '<span class="badge badge-accent text-[9px] px-1.5 py-0" style="font-size:9px">NEW</span>' : ''}
+        </div>
+        <span class="text-[10px] font-mono ml-2 flex-shrink-0" style="color:var(--text-muted)">${ep.date||''}</span>
+      </div>`;
+    }).reverse().join('');
+
+    // Bookmark button — prominent at top right of header
     const bmBtn = d.bookmarked
-      ? `<button onclick="toggleBookmarkModal(${id},this)" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-lg">⭐ Bookmarked</button>`
-      : `<button onclick="toggleBookmarkModal(${id},this)" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg">☆ Bookmark</button>`;
+      ? `<button onclick="toggleBookmarkModal(${id},this)" class="btn btn-sm" style="background:rgba(245,158,11,0.2);color:#fbbf24;border:1px solid rgba(245,158,11,0.4)"><i data-lucide="bookmark-check" class="w-3.5 h-3.5"></i> Bookmarked</button>`
+      : `<button onclick="toggleBookmarkModal(${id},this)" class="btn btn-primary btn-sm"><i data-lucide="bookmark-plus" class="w-3.5 h-3.5"></i> Bookmark</button>`;
+
+    // Stat pills (replacing dense metadata text)
+    const statPills = [
+      { icon: 'tv', label: 'Type', value: d.type || '?' },
+      { icon: 'circle-dot', label: 'Status', value: d.status || '?', color: statusColor },
+      { icon: 'star', label: 'Score', value: d.score ? '★ ' + d.score : '-', color: '#fbbf24' },
+      { icon: 'building-2', label: 'Studio', value: d.studio || '-' },
+      { icon: 'film', label: 'Episodes', value: d.total_episodes || (d.episodes?.length || '?') },
+      { icon: 'clock-3', label: 'Duration', value: d.duration || '-' },
+      { icon: 'calendar', label: 'Day', value: d.day || '-', color: 'var(--accent)' },
+    ].map(s => `
+      <div class="flex items-center gap-2 px-3 py-2 rounded-lg" style="background:var(--bg-elevated);border:1px solid var(--border-subtle)">
+        <i data-lucide="${s.icon}" class="w-3.5 h-3.5 flex-shrink-0" style="color:${s.color || 'var(--text-muted)'}"></i>
+        <div class="min-w-0">
+          <div class="text-[9px] font-mono uppercase tracking-wider" style="color:var(--text-muted)">${s.label}</div>
+          <div class="text-xs font-semibold truncate" style="color:${s.color || 'var(--text-primary)'}">${s.value}</div>
+        </div>
+      </div>
+    `).join('');
 
     document.getElementById('anime-modal-body').innerHTML = `
-      <div class="flex gap-3 mb-4">
-        <img src="${d.image||''}" class="w-24 h-32 sm:w-28 sm:h-36 object-cover rounded-lg flex-shrink-0" onerror="this.style.display='none'">
-        <div class="min-w-0">
-          <h3 class="text-sm sm:text-base font-bold text-white mb-1">${d.title}</h3>
-          <div class="text-[10px] text-gray-400 space-y-0.5">
-            <div><b>Type:</b> ${d.type||'?'} • <b>Status:</b> ${d.status||'?'}</div>
-            <div><b>Score:</b> ⭐ ${d.score||'-'} • <b>Studio:</b> ${d.studio||'-'}</div>
-            <div><b>Episodes:</b> ${d.total_episodes||d.episodes?.length||'?'} • <b>Duration:</b> ${d.duration||'?'}</div>
-            <div><b>Hari:</b> ${d.day||'-'}</div>
+      <!-- Hero header with gradient overlay -->
+      <div class="relative -mx-5 -mt-5 mb-5 overflow-hidden rounded-t-[14px]" style="aspect-ratio:21/9;background:var(--bg-elevated)">
+        ${d.image ? `<img src="${d.image}" class="absolute inset-0 w-full h-full object-cover" style="filter:blur(18px) brightness(0.5);transform:scale(1.1)" onerror="this.style.display='none'">` : ''}
+        <div class="absolute inset-0" style="background:linear-gradient(180deg, rgba(10,15,26,0.4) 0%, rgba(10,15,26,0.95) 100%)"></div>
+        <div class="relative h-full flex items-end gap-4 p-5">
+          ${d.image ? `<img src="${d.image}" class="w-24 h-32 sm:w-28 sm:h-40 object-cover rounded-lg shadow-2xl flex-shrink-0" style="border:2px solid var(--border-default)" onerror="this.style.display='none'">` : ''}
+          <div class="min-w-0 flex-1">
+            <h2 class="text-lg sm:text-2xl font-bold tracking-tight mb-1.5 line-clamp-2" style="color:var(--text-primary);text-shadow:0 2px 8px rgba(0,0,0,0.5)">${d.title}</h2>
+            <div class="flex items-center gap-2 flex-wrap">
+              ${d.score ? `<span class="text-xs font-semibold px-2 py-0.5 rounded-md" style="background:rgba(251,191,36,0.95);color:#0a0f1a">★ ${d.score}</span>` : ''}
+              <span class="badge" style="background:${statusColor}25;color:${statusColor};border:1px solid ${statusColor}50">${d.status || '?'}</span>
+              <span class="badge badge-muted">${d.type || '?'}</span>
+            </div>
           </div>
-          <div class="flex flex-wrap gap-1 mt-2">${genres}</div>
-          <div class="mt-2">${bmBtn}</div>
+          <div class="hidden sm:block flex-shrink-0">${bmBtn}</div>
         </div>
       </div>
-      ${d.synopsis?`<div class="text-[10px] text-gray-500 mb-3 line-clamp-3">${d.synopsis}</div>`:''}
-      <div class="text-xs font-medium text-gray-300 mb-2">📺 Episodes (${d.episodes?.length||0})</div>
-      <div class="max-h-60 overflow-y-auto space-y-0.5 bg-gray-800/30 rounded-lg p-1">
-        ${eps||'<div class="text-center py-4 text-gray-500 text-xs">Belum ada episode — akan di-scrape pada cycle berikutnya</div>'}
+
+      <!-- Bookmark button mobile (below hero) -->
+      <div class="sm:hidden mb-4">${bmBtn}</div>
+
+      <!-- Stat pills grid -->
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4">
+        ${statPills}
+      </div>
+
+      <!-- Genres -->
+      ${genres ? `
+      <div class="mb-4">
+        <div class="text-[10px] font-mono uppercase tracking-wider mb-2" style="color:var(--text-muted)">Genres</div>
+        <div class="flex flex-wrap gap-1.5">${genres}</div>
+      </div>` : ''}
+
+      <!-- Synopsis with show more -->
+      ${d.synopsis ? `
+      <div class="mb-5" id="syn-wrap">
+        <div class="text-[10px] font-mono uppercase tracking-wider mb-2" style="color:var(--text-muted)">Synopsis</div>
+        <div class="text-xs leading-relaxed synopsis-collapsible collapsed" style="color:var(--text-secondary)" id="syn-text">${escapeHtml(d.synopsis)}</div>
+        ${d.synopsis.length > 240 ? `<button onclick="toggleSyn()" class="text-[11px] mt-1 hover:underline" style="color:var(--accent)" id="syn-btn">Show more</button>` : ''}
+      </div>` : ''}
+
+      <!-- Episodes -->
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <i data-lucide="play-circle" class="w-4 h-4" style="color:var(--accent)"></i>
+          <h3 class="text-sm font-semibold tracking-tight">Episodes</h3>
+        </div>
+        <span class="badge badge-muted">${d.episodes?.length||0} total</span>
+      </div>
+      <div class="max-h-72 overflow-y-auto space-y-1 rounded-lg p-2" style="background:var(--bg-base);border:1px solid var(--border-subtle)">
+        ${eps || '<div class="text-center py-6 text-xs" style="color:var(--text-muted)">Belum ada episode — akan di-scrape pada cycle berikutnya</div>'}
       </div>
     `;
+    if (window.lucide) lucide.createIcons();
   }catch(e){
-    document.getElementById('anime-modal-body').innerHTML = `<div class="text-red-400">Error: ${e.message}</div>`;
+    console.error('showAnimeDetail error:', e);
+    document.getElementById('anime-modal-body').innerHTML = `<div class="text-red-400 p-4">Error: ${e.message}</div>`;
+  }
+}
+
+// Escape HTML entities to prevent breakage from special chars in synopsis
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/[&<>"'`]/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'
+  }[c]));
+}
+
+function toggleSyn() {
+  const t = document.getElementById('syn-text');
+  const b = document.getElementById('syn-btn');
+  if (!t || !b) return;
+  if (t.classList.contains('collapsed')) {
+    t.classList.remove('collapsed');
+    b.textContent = 'Show less';
+  } else {
+    t.classList.add('collapsed');
+    b.textContent = 'Show more';
   }
 }
 
 async function toggleBookmarkModal(id, btn){
-  const isBookmarked = btn.textContent.includes('⭐');
+  const isBookmarked = btn.textContent.includes('Bookmarked');
   const action = isBookmarked ? 'remove' : 'add';
   const fd = new FormData();
   fd.append('anime_id', id);
   const r = await fetch(`/api/anime/bookmark/${action}`, {method:'POST', body:fd});
   const d = await r.json();
   if(d.ok){
-    btn.textContent = d.bookmarked ? '⭐ Bookmarked' : '☆ Bookmark';
-    btn.className = d.bookmarked
-      ? 'px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-lg'
-      : 'px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded-lg';
-    // Update grid card too
+    btn.outerHTML = d.bookmarked
+      ? `<button onclick="toggleBookmarkModal(${id},this)" class="btn btn-sm" style="background:rgba(245,158,11,0.2);color:#fbbf24;border:1px solid rgba(245,158,11,0.4)"><i data-lucide="bookmark-check" class="w-3.5 h-3.5"></i> Bookmarked</button>`
+      : `<button onclick="toggleBookmarkModal(${id},this)" class="btn btn-ghost btn-sm"><i data-lucide="bookmark" class="w-3.5 h-3.5"></i> Bookmark</button>`;
+    if (window.lucide) lucide.createIcons();
     const card = document.querySelector(`.anime-card[data-id="${id}"]`);
     if(card){
       card.dataset.bookmarked = d.bookmarked ? '1' : '0';
       const starBtn = card.querySelector('button[title="Bookmark"]');
-      if(starBtn) starBtn.textContent = d.bookmarked ? '⭐' : '☆';
+      if(starBtn) starBtn.innerHTML = `<i data-lucide="${d.bookmarked ? 'bookmark-check' : 'bookmark'}" class="w-3.5 h-3.5" style="color:${d.bookmarked ? '#fbbf24' : 'var(--text-muted)'}"></i>`;
+      if (window.lucide) lucide.createIcons();
     }
   }
 }
@@ -237,21 +349,17 @@ function closeAnimeModal(){
 
 document.addEventListener('keydown', e=>{if(e.key==='Escape')closeAnimeModal()});
 
-// Realtime server clock
 (function(){
   const clockEl = document.getElementById('server-clock');
   if(!clockEl) return;
-  // Parse initial server time
   const parts = '{{ server_time }}'.split(':');
   let h = parseInt(parts[0]), m = parseInt(parts[1]), s = parseInt(parts[2]);
-
   function tick(){
     s++;
     if(s>=60){s=0;m++}
     if(m>=60){m=0;h++}
     if(h>=24){h=0}
-    clockEl.textContent = 
-      String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+    clockEl.textContent = String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
   }
   setInterval(tick, 1000);
 })();

@@ -1,35 +1,26 @@
 logging:
   level: INFO
-
 output:
   directory: /opt/services/komiku-scraper/output
-
 scraper:
-  api_url: "https://api.komiku.org/manga/"
-  base_url: "https://komiku.org"
-  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-  # Update tracker
-  interval_minutes: 30
-  update_pages: 3
-  update_delay: 1.0
-  update_types:
-    - ""        # default (mixed all types)
-    - "manhwa"
-    - "manhua"
-    - "manga"
-
-  # Full scan
-  full_scan_delay: 0.5
+  api_url: https://api.komiku.org/manga/
+  base_url: https://komiku.org
   full_scan_batch_size: 50
-
-  # General
+  full_scan_delay: 0.5
+  interval_minutes: 30
   max_retries: 3
   timeout: 30
-
-webhook:
-  enabled: true
-  discord_url: "https://discord.com/api/webhooks/1499934809420468436/ZJMgYWal_nqdk-gmH_Nzfvxh8fL6sFr_fh0GCwjuJFkFmJiQ8KcWNjfjjt0kdDogC_DP"
-  notify_mode: "all"
-
+  update_delay: 1.0
+  update_pages: 3
+  update_types:
+  - ''
+  - manhwa
+  - manhua
+  - manga
+  user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+    like Gecko) Chrome/120.0.0.0 Safari/537.36
 watchlist: []
+webhook:
+  discord_url: https://discord.com/api/webhooks/1499934809420468436/ZJMgYWal_nqdk-gmH_Nzfvxh8fL6sFr_fh0GCwjuJFkFmJiQ8KcWNjfjjt0kdDogC_DP
+  enabled: true
+  notify_mode: bookmark

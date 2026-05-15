@@ -1,102 +1,126 @@
 {% extends "base.html" %}{% block title %}Bookmarks{% endblock %}
 {% block content %}
 <style>
-.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:50;display:none;align-items:center;justify-content:center}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);z-index:50;display:none;align-items:center;justify-content:center}
 .modal-bg.show{display:flex}
-.ch-list{max-height:250px;overflow-y:auto}.ch-list::-webkit-scrollbar{width:4px}.ch-list::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
-.g{font-size:9px;padding:1px 5px;border-radius:9999px;border:1px solid var(--border);color:var(--text2)}
-.bk:hover{opacity:.85;cursor:pointer}
+.ch-list{max-height:280px;overflow-y:auto}
+.ch-list::-webkit-scrollbar{width:4px}.ch-list::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:2px}
+.g{font-size:10px;padding:2px 7px;border-radius:9999px;border:1px solid var(--border-default);color:var(--text-secondary)}
+.bk{cursor:pointer;transition:all 150ms}
+.bk:hover{border-color:var(--accent)!important;background:var(--bg-elevated)}
 </style>
 
-<h2 class="text-lg sm:text-xl font-bold mb-1">⭐ Bookmarks</h2>
-<p class="text-xs mb-1" style="color:var(--text3)">{{ bookmarks|length }} komik • {{ anime_bookmarks|length }} anime — bookmark = watchlist notifikasi</p>
-<p class="text-[9px] mb-4" style="color:var(--text3)">Komik/anime yang di-bookmark akan otomatis mendapat notifikasi Discord saat ada update baru</p>
+<!-- Header -->
+<div class="mb-6 fade-in">
+  <div class="flex items-center gap-2 mb-2">
+    <i data-lucide="bookmark" class="w-4 h-4" style="color:var(--accent)"></i>
+    <span class="text-xs font-mono uppercase tracking-wider" style="color:var(--accent)">Watchlist</span>
+  </div>
+  <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">Bookmarks</h1>
+  <p class="text-sm mt-1" style="color:var(--text-secondary)">
+    <span class="font-mono font-semibold" style="color:var(--text-primary)">{{ bookmarks|length }}</span> komik ·
+    <span class="font-mono font-semibold" style="color:var(--text-primary)">{{ anime_bookmarks|length }}</span> anime · auto-notifikasi Discord
+  </p>
+</div>
 
 <!-- Anime Bookmarks -->
 {% if anime_bookmarks %}
-<h3 class="text-sm font-medium text-gray-300 mb-2">🎬 Anime Bookmarks</h3>
-<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+<div class="flex items-center gap-2 mb-3">
+  <h2 class="text-sm font-semibold tracking-tight">Anime</h2>
+  <span class="badge badge-muted">{{ anime_bookmarks|length }}</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
 {% for a in anime_bookmarks %}
-<div class="bk flex gap-3 p-3 rounded-xl" style="background:var(--bg2);border:1px solid var(--border)" onclick="window.location='/anime/detail?url={{ a.url|urlencode }}'">
-{% if a.image %}<img src="{{ a.image }}" class="w-16 h-22 object-cover rounded-lg flex-shrink-0" loading="lazy" onerror="this.style.display='none'">{% endif %}
-<div class="flex-1 min-w-0">
-<div class="flex items-center justify-between">
-<p class="text-sm font-medium truncate">{{ a.title }}</p>
-<button onclick="event.stopPropagation();removeAnimeBM(this,{{ a.id }})" class="text-sm flex-shrink-0 hover:scale-110 transition-transform" title="Remove">⭐</button>
-</div>
-<div class="flex items-center gap-1 mt-1 flex-wrap">
-<span class="text-[9px] px-1.5 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">{{ a.type or 'TV' }}</span>
-<span class="text-[9px]" style="color:var(--text3)">{{ a.studio or '?' }}</span>
-{% if a.score %}<span class="text-[9px] text-yellow-500">⭐{{ a.score }}</span>{% endif %}
-</div>
-{% if a.episodes %}
-<div class="mt-1.5">
-{% for ep in a.episodes %}
-<a href="/watch?url={{ ep.url|urlencode }}" onclick="event.stopPropagation()" class="block text-[10px] text-indigo-400 hover:text-indigo-300">{{ ep.text }}{% if ep.date %} <span style="color:var(--text3)">· {{ ep.date }}</span>{% endif %}</a>
-{% endfor %}
-</div>
-{% endif %}
-</div>
+<div class="bk card p-3 flex gap-3" onclick="window.location='/anime/detail?url={{ a.url|urlencode }}'">
+  {% if a.image %}<img src="{{ a.image }}" class="w-16 h-22 object-cover rounded-md flex-shrink-0" loading="lazy" onerror="this.style.display='none'">{% endif %}
+  <div class="flex-1 min-w-0">
+    <div class="flex items-start justify-between gap-2">
+      <p class="text-sm font-medium truncate">{{ a.title }}</p>
+      <button onclick="event.stopPropagation();removeAnimeBM(this,{{ a.id }})" class="hover:scale-110 transition-transform flex-shrink-0" title="Remove">
+        <i data-lucide="bookmark-check" class="w-4 h-4" style="color:#fbbf24"></i>
+      </button>
+    </div>
+    <div class="flex items-center gap-1.5 mt-1.5 flex-wrap">
+      <span class="badge badge-muted">{{ a.type or 'TV' }}</span>
+      <span class="text-[11px]" style="color:var(--text-muted)">{{ a.studio or '?' }}</span>
+      {% if a.score %}<span class="text-[11px]" style="color:#fbbf24">★ {{ a.score }}</span>{% endif %}
+    </div>
+    {% if a.episodes %}
+    <div class="mt-2 space-y-0.5">
+      {% for ep in a.episodes %}
+      <a href="/watch?url={{ ep.url|urlencode }}" onclick="event.stopPropagation()" class="block text-[11px] truncate hover:underline" style="color:var(--accent)">{{ ep.text }}{% if ep.date %} <span style="color:var(--text-muted)">· {{ ep.date }}</span>{% endif %}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
 </div>
 {% endfor %}
 </div>
 {% endif %}
 
 <!-- Komik Bookmarks -->
-<h3 class="text-sm font-medium text-gray-300 mb-2">📖 Komik Bookmarks</h3>
+<div class="flex items-center gap-2 mb-3">
+  <h2 class="text-sm font-semibold tracking-tight">Komik</h2>
+  <span class="badge badge-muted">{{ bookmarks|length }}</span>
+</div>
 
 {% if bookmarks %}
-<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
 {% for k in bookmarks %}
-<div class="bk flex gap-3 p-3 rounded-xl" style="background:var(--bg2);border:1px solid var(--border)" onclick="showDetail({{ k.id }})">
-{% if k.image %}<img src="{{ k.image }}" class="w-16 h-22 object-cover rounded-lg flex-shrink-0" style="background:var(--bg3)" loading="lazy" onerror="this.style.display='none'">{% endif %}
-<div class="flex-1 min-w-0">
-<div class="flex items-center justify-between">
-<p class="text-sm font-medium truncate">{{ k.title }}</p>
-<button onclick="event.stopPropagation();removeBM(this,'{{ k.title|e }}')" class="text-sm flex-shrink-0 hover:scale-110 transition-transform" title="Remove">⭐</button>
-</div>
-<div class="flex items-center gap-1 mt-1 flex-wrap">
-<span class="text-[9px] px-1.5 py-0.5 rounded" style="background:var(--bg3);color:var(--text2)">{{ k.type or '?' }}</span>
-<span class="text-[9px]" style="color:var(--text3)">{{ k.source }}</span>
-{% if k.status %}<span class="text-[9px] {% if 'Ongoing' in (k.status or '') %}text-emerald-400{% else %}text-orange-400{% endif %}">{{ k.status }}</span>{% endif %}
-{% if k.rating %}<span class="text-[9px] text-yellow-500">⭐{{ k.rating }}</span>{% endif %}
-</div>
-{% if k.genres %}<div class="flex flex-wrap gap-1 mt-1">{% for g in k.genres[:4] %}<span class="g">{{ g }}</span>{% endfor %}</div>{% endif %}
-{% if k.chapters %}
-<div class="mt-1.5">
-{% for ch in k.chapters %}
-<a href="{{ ch.url }}" target="_blank" onclick="event.stopPropagation()" class="block text-[10px] text-indigo-400 hover:text-indigo-300">{{ ch.text }}{% if ch.date %} <span style="color:var(--text3)">· {{ ch.date }}</span>{% endif %}</a>
-{% endfor %}
-</div>
-{% endif %}
-</div>
+<div class="bk card p-3 flex gap-3" onclick="showDetail({{ k.id }})">
+  {% if k.image %}<img src="{{ k.image }}" class="w-16 h-22 object-cover rounded-md flex-shrink-0" loading="lazy" onerror="this.style.display='none'">{% endif %}
+  <div class="flex-1 min-w-0">
+    <div class="flex items-start justify-between gap-2">
+      <p class="text-sm font-medium truncate">{{ k.title }}</p>
+      <button onclick="event.stopPropagation();removeBM(this,'{{ k.title|e }}')" class="hover:scale-110 transition-transform flex-shrink-0" title="Remove">
+        <i data-lucide="bookmark-check" class="w-4 h-4" style="color:#fbbf24"></i>
+      </button>
+    </div>
+    <div class="flex items-center gap-1.5 mt-1.5 flex-wrap">
+      <span class="badge badge-muted">{{ k.type or '?' }}</span>
+      <span class="text-[11px]" style="color:var(--text-muted)">{{ k.source }}</span>
+      {% if k.status %}<span class="badge {% if 'Ongoing' in (k.status or '') %}badge-success{% else %}badge-warning{% endif %}">{{ k.status }}</span>{% endif %}
+      {% if k.rating %}<span class="text-[11px]" style="color:#fbbf24">★ {{ k.rating }}</span>{% endif %}
+    </div>
+    {% if k.genres %}<div class="flex flex-wrap gap-1 mt-1.5">{% for g in k.genres[:4] %}<span class="g">{{ g }}</span>{% endfor %}</div>{% endif %}
+    {% if k.chapters %}
+    <div class="mt-2 space-y-0.5">
+      {% for ch in k.chapters %}
+      <a href="{{ ch.url }}" target="_blank" onclick="event.stopPropagation()" class="block text-[11px] truncate hover:underline" style="color:var(--accent)">{{ ch.text }}{% if ch.date %} <span style="color:var(--text-muted)">· {{ ch.date }}</span>{% endif %}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
 </div>
 {% endfor %}
 </div>
 {% else %}
-<div class="rounded-xl p-8 text-center" style="background:var(--bg2);border:1px dashed var(--border)">
-<p class="text-2xl mb-2">☆</p>
-<p class="text-sm" style="color:var(--text3)">Belum ada bookmark. Klik ☆ di komik card untuk menambahkan.</p>
+<div class="card p-12 text-center" style="border-style:dashed">
+  <i data-lucide="bookmark-x" class="w-12 h-12 mx-auto mb-3" style="color:var(--text-muted)"></i>
+  <p class="text-sm" style="color:var(--text-secondary)">Belum ada bookmark komik</p>
+  <p class="text-xs mt-1" style="color:var(--text-muted)">Klik ikon bookmark di komik card untuk menambahkan</p>
 </div>
 {% endif %}
 
 <!-- Detail Modal -->
 <div class="modal-bg" id="dm" onclick="if(event.target===this)this.classList.remove('show')">
-<div class="w-full max-w-lg max-h-[90vh] overflow-y-auto mx-2 sm:mx-4 p-4 sm:p-5 rounded-2xl" style="background:var(--bg2);border:1px solid var(--border)">
-<div class="flex justify-between items-start mb-3">
-<h3 class="text-lg font-bold pr-4" id="dm-t"></h3>
-<button onclick="document.getElementById('dm').classList.remove('show')" class="text-xl" style="color:var(--text3)">×</button>
-</div>
-<div class="flex gap-4 mb-3">
-<img id="dm-img" src="" class="w-28 h-40 sm:w-32 sm:h-44 object-cover rounded-lg" style="background:var(--bg3)" onerror="this.style.display='none'">
-<div class="flex-1"><div id="dm-meta"></div><div id="dm-genres" class="flex flex-wrap gap-1 mt-2"></div></div>
-</div>
-<div id="dm-syn" class="text-[11px] mb-3 hidden" style="color:var(--text2)"></div>
-<div class="flex items-center justify-between mb-1">
-<h4 class="text-[10px] uppercase tracking-wider" style="color:var(--text3)">Chapters</h4>
-<span id="dm-chcount" class="text-[9px]" style="color:var(--text3)"></span>
-</div>
-<div id="dm-ch" class="ch-list space-y-0.5"></div>
+<div class="w-full max-w-lg max-h-[90vh] overflow-y-auto mx-4 card p-5 slide-up">
+  <div class="flex justify-between items-start mb-4">
+    <h3 class="text-lg font-semibold tracking-tight pr-4" id="dm-t"></h3>
+    <button onclick="document.getElementById('dm').classList.remove('show')" class="p-1 rounded hover:bg-[var(--bg-elevated)]" style="color:var(--text-muted)">
+      <i data-lucide="x" class="w-4 h-4"></i>
+    </button>
+  </div>
+  <div class="flex gap-4 mb-3">
+    <img id="dm-img" src="" class="w-28 h-40 sm:w-32 sm:h-44 object-cover rounded-lg" style="background:var(--bg-elevated)" onerror="this.style.display='none'">
+    <div class="flex-1"><div id="dm-meta" class="space-y-1"></div><div id="dm-genres" class="flex flex-wrap gap-1 mt-3"></div></div>
+  </div>
+  <div id="dm-syn" class="text-xs leading-relaxed mb-4 hidden" style="color:var(--text-secondary)"></div>
+  <div class="flex items-center justify-between mb-2">
+    <h4 class="text-sm font-semibold tracking-tight">Chapters</h4>
+    <span id="dm-chcount" class="badge badge-muted"></span>
+  </div>
+  <div id="dm-ch" class="ch-list space-y-1"></div>
 </div>
 </div>
 
@@ -126,32 +150,30 @@ function showDetail(id){
     const img=document.getElementById('dm-img');
     if(k.image){img.src=k.image;img.style.display='block'}else img.style.display='none';
     let m='';
-    m+='<p class="text-[11px]"><span style="color:var(--text3)">Type:</span> '+(k.type||'?')+'</p>';
-    m+='<p class="text-[11px]"><span style="color:var(--text3)">Status:</span> '+(k.status||'?')+'</p>';
-    m+='<p class="text-[11px]"><span style="color:var(--text3)">Rating:</span> '+(k.rating||'?')+'</p>';
-    m+='<p class="text-[11px]"><span style="color:var(--text3)">Source:</span> '+k.source+'</p>';
-    if(k.author)m+='<p class="text-[11px]"><span style="color:var(--text3)">Author:</span> '+k.author+'</p>';
-    if(k.alt_title)m+='<p class="text-[9px] mt-1" style="color:var(--text3)">'+k.alt_title.substring(0,120)+'</p>';
+    m+='<p class="text-xs"><span style="color:var(--text-muted)">Type</span> '+(k.type||'?')+'</p>';
+    m+='<p class="text-xs"><span style="color:var(--text-muted)">Status</span> '+(k.status||'?')+'</p>';
+    m+='<p class="text-xs"><span style="color:var(--text-muted)">Rating</span> '+(k.rating||'?')+'</p>';
+    m+='<p class="text-xs"><span style="color:var(--text-muted)">Source</span> '+k.source+'</p>';
+    if(k.author)m+='<p class="text-xs"><span style="color:var(--text-muted)">Author</span> '+k.author+'</p>';
     document.getElementById('dm-meta').innerHTML=m;
     document.getElementById('dm-genres').innerHTML=(k.genres||[]).map(g=>'<span class="g">'+g+'</span>').join('');
     const sd=document.getElementById('dm-syn');
     if(k.synopsis){sd.textContent=k.synopsis;sd.classList.remove('hidden')}else sd.classList.add('hidden');
-    document.getElementById('dm-chcount').textContent=k.chapters.length+' chapters';
     let c='';
     let readCount=0;
     (k.chapters||[]).forEach((ch,i)=>{
       const isRead=ch.read;
       if(isRead)readCount++;
-      c+='<div id="ch-row-'+i+'" class="flex items-center justify-between px-2 py-1 rounded '+(isRead?'opacity-50':'')+'" style="border-bottom:1px solid var(--border)">';
-      c+='<span id="ch-txt-'+i+'" class="text-[11px] '+(isRead?'line-through':'')+'" style="color:var(--text2)">'+ch.text+(isRead?' ✓':'')+'</span>';
+      c+='<div id="ch-row-'+i+'" class="flex items-center justify-between px-2 py-1.5 rounded '+(isRead?'opacity-50':'')+'" style="border-bottom:1px solid var(--border-subtle)">';
+      c+='<span id="ch-txt-'+i+'" class="text-xs '+(isRead?'line-through':'')+'" style="color:var(--text-secondary)">'+ch.text+(isRead?' ✓':'')+'</span>';
       c+='<div class="flex items-center gap-2">';
-      if(ch.date)c+='<span class="text-[9px]" style="color:var(--text3)">'+ch.date+'</span>';
-      c+='<a href="/read?url='+encodeURIComponent(ch.url)+'" onclick="markChRead('+i+',\''+ch.url+'\',\''+ch.text+'\')" class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/40">Baca</a>';
-      c+='<a href="'+ch.url+'" target="_blank" onclick="markChRead('+i+',\''+ch.url+'\',\''+ch.text+'\')" class="text-[9px] px-1.5 py-0.5 rounded text-indigo-400 hover:opacity-70" style="background:var(--bg3)">↗</a>';
+      if(ch.date)c+='<span class="text-[10px] font-mono" style="color:var(--text-muted)">'+ch.date+'</span>';
+      c+='<a href="/read?url='+encodeURIComponent(ch.url)+'" onclick="markChRead('+i+',\''+ch.url+'\',\''+ch.text+'\')" class="text-[10px] px-2 py-0.5 rounded" style="background:var(--accent-muted);color:var(--accent)">Baca</a>';
+      c+='<a href="'+ch.url+'" target="_blank" onclick="markChRead('+i+',\''+ch.url+'\',\''+ch.text+'\')" class="text-[10px] px-2 py-0.5 rounded" style="background:var(--bg-elevated);color:var(--accent)">↗</a>';
       c+='</div></div>';
     });
-    document.getElementById('dm-chcount').textContent=k.chapters.length+' chapters'+(readCount?' · '+readCount+' dibaca':'');
-    document.getElementById('dm-ch').innerHTML=c||'<p class="text-[11px] p-2" style="color:var(--text3)">No chapters</p>';
+    document.getElementById('dm-chcount').textContent=k.chapters.length+' ch'+(readCount?' · '+readCount+' read':'');
+    document.getElementById('dm-ch').innerHTML=c||'<p class="text-xs p-2" style="color:var(--text-muted)">No chapters</p>';
     document.getElementById('dm').classList.add('show');
   });
 }

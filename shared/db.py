@@ -191,6 +191,24 @@ CREATE TABLE IF NOT EXISTS komiku_scan_state (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- App-wide settings (key-value) — used for Telegram backup config etc.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Backup run history
+CREATE TABLE IF NOT EXISTS backup_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    size_bytes INTEGER DEFAULT 0,
+    duration_sec REAL DEFAULT 0,
+    status TEXT NOT NULL,
+    error_msg TEXT DEFAULT '',
+    trigger TEXT DEFAULT 'manual'
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_komik_title ON komik(title);
 CREATE INDEX IF NOT EXISTS idx_komik_source ON komik(source);
@@ -212,20 +230,37 @@ CREATE INDEX IF NOT EXISTS idx_fruityblox_rotations_type ON fruityblox_rotations
 
 
 def get_db() -> sqlite3.Connection:
-    """Get a database connection with row factory."""
-    db = sqlite3.connect(str(DB_PATH))
+    """Get a database connection with row factory.
+
+    Memory-optimized for low-RAM VPS (2GB):
+    - cache_size=-16000 → ~16MB per connection (was 64MB)
+    - mmap_size=67108864 → 64MB virtual mmap (was 256MB)
+    - WAL/foreign_keys/synchronous are persistent settings, set once
+    """
+    db = sqlite3.connect(str(DB_PATH), timeout=10.0)
     db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
-    db.execute("PRAGMA cache_size=-64000")
+    # Per-connection runtime settings (must be set each time)
+    db.execute("PRAGMA cache_size=-16000")     # 16MB page cache (was 64MB)
     db.execute("PRAGMA temp_store=MEMORY")
-    db.execute("PRAGMA mmap_size=268435456")
-    db.execute("PRAGMA synchronous=NORMAL")
+    db.execute("PRAGMA mmap_size=67108864")    # 64MB mmap (was 256MB)
+    db.execute("PRAGMA foreign_keys=ON")
     return db
+
+
+def _bootstrap_persistent_pragmas():
+    """Apply persistent PRAGMAs once at startup (WAL, synchronous)."""
+    db = sqlite3.connect(str(DB_PATH))
+    try:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA synchronous=NORMAL")
+        db.commit()
+    finally:
+        db.close()
 
 
 def init_db():
     """Initialize database schema."""
+    _bootstrap_persistent_pragmas()
     db = get_db()
     db.executescript(SCHEMA)
     db.commit()
@@ -622,6 +657,50 @@ def update_komik_fully_scanned(db: sqlite3.Connection, komik_id: int, total_chap
 def update_komik_total_chapters(db: sqlite3.Connection, komik_id: int, total: int):
     """Update total_chapters count."""
     db.execute("UPDATE komik SET total_chapters=? WHERE id=?", (total, komik_id))
+
+
+# ── App Settings (key-value) ──────────────────────────
+def get_setting(db: sqlite3.Connection, key: str, default: str = "") -> str:
+    """Get a single app setting."""
+    row = db.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(db: sqlite3.Connection, key: str, value: str):
+    """Set or update a single app setting."""
+    db.execute("""
+        INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+    """, (key, str(value), datetime.now().isoformat()))
+
+
+def get_all_settings(db: sqlite3.Connection, prefix: str = "") -> dict:
+    """Get all settings, optionally filtered by key prefix."""
+    if prefix:
+        rows = db.execute("SELECT key, value FROM app_settings WHERE key LIKE ?", (prefix + "%",)).fetchall()
+    else:
+        rows = db.execute("SELECT key, value FROM app_settings").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+# ── Backup Log ──────────────────────────────────────────
+def log_backup_run(db: sqlite3.Connection, status: str, size_bytes: int = 0,
+                   duration_sec: float = 0.0, error_msg: str = "", trigger: str = "manual"):
+    """Log a backup run."""
+    db.execute("""
+        INSERT INTO backup_log (status, size_bytes, duration_sec, error_msg, trigger)
+        VALUES (?, ?, ?, ?, ?)
+    """, (status, size_bytes, duration_sec, error_msg or "", trigger))
+    db.commit()
+
+
+def get_backup_log(db: sqlite3.Connection, limit: int = 10) -> list[dict]:
+    """Get recent backup runs."""
+    rows = db.execute("""
+        SELECT id, run_at, size_bytes, duration_sec, status, error_msg, trigger
+        FROM backup_log ORDER BY id DESC LIMIT ?
+    """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 # Initialize on import
