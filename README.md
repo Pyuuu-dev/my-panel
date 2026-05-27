@@ -1,12 +1,15 @@
 # 🖥️ Service Manager Panel
 
-Panel manajemen layanan berbasis web untuk monitoring scraper komik, anime, dan Blox Fruits stock — dibangun di atas FastAPI + Jinja2 + TailwindCSS dengan SQLite sebagai database.
+Panel manajemen layanan berbasis web untuk monitoring scraper komik, anime, Blox Fruits stock, dan **server-wide project monitoring & management** — dibangun di atas FastAPI + Jinja2 + TailwindCSS dengan SQLite sebagai database.
 
 **Live:** [panel.ldctesting.my.id](https://panel.ldctesting.my.id)
 
 ---
 
 ## 📦 Fitur
+
+### 🛰️ Projects Monitoring & Management *(v6.0)*
+Server-wide control plane untuk **semua project yang jalan di server**, bukan cuma scraper di `/opt/services`. Lihat detail di [Projects Module](#-projects-module-v60).
 
 ### 🍎 Komiku Scraper
 - **Full Library Scan** — Scan semua ~7.167 komik dari komiku.org secara sequential, resumable, dan bisa di-stop kapan saja
@@ -78,21 +81,86 @@ Panel manajemen layanan berbasis web untuk monitoring scraper komik, anime, dan 
 /opt/services/
 ├── dashboard/              # FastAPI web dashboard
 │   └── app/
-│       ├── main.py         # Routes & API endpoints (~2660 lines)
-│       └── templates/      # Jinja2 HTML templates (20 files)
+│       ├── main.py         # Routes & API endpoints (~4400 lines)
+│       ├── projects/       # Projects module (v6.0)
+│       │   ├── adapters/   # supervisor / systemd / apache_vhost / port / custom
+│       │   ├── service.py  # ProjectService orchestrator
+│       │   ├── discovery.py
+│       │   ├── collector.py    # Background metrics task
+│       │   ├── events.py       # SSE event broker (pub/sub)
+│       │   ├── log_stream.py   # File + journalctl tailers
+│       │   ├── alerts.py       # Rule evaluator + log scanner
+│       │   ├── dispatcher.py   # Webhook backends
+│       │   └── scheduler.py    # Cron + interval aggregator
+│       └── templates/      # Jinja2 HTML templates (~30 files)
 ├── komiku-scraper/         # Komiku.org scraper
-│   ├── scraper.py          # Full scan + update tracker
-│   └── config.yaml
 ├── otakudesu-scraper/      # Otakudesu anime scraper
-│   ├── scraper.py
-│   └── config.yaml
 ├── fruityblox-scraper/     # Blox Fruits stock monitor
-│   ├── scraper.py
-│   └── config.yaml
+├── nhentai-service/        # NSFW client (optional)
 └── shared/
-    ├── db.py               # Shared SQLite module + helpers
-    └── app.db              # Database (~109 MB)
+    ├── db.py               # Schema + helpers (~1250 lines)
+    └── app.db              # SQLite database
 ```
+
+---
+
+## 🛰️ Projects Module *(v6.0)*
+
+Module baru yang di-fokuskan untuk monitoring & manage **seluruh project di server**, bukan terbatas pada scraper di `/opt/services`. Mendeteksi otomatis: supervisor programs, systemd units, apache vhosts, listening ports, custom commands.
+
+### Halaman
+
+| Path | Deskripsi |
+|------|-----------|
+| `/projects` | Mission control — bento grid asimetris semua project, KPI strip, filter health, density toggle, sparkline CPU/RSS, critical banner, action toolbar |
+| `/projects/{slug}` | Detail page · 6 tabs: Overview (resource chart 1h/6h/24h), Logs (SSE streaming), Events, Config (multi-file editor dengan adapter validation), Alerts, Audit |
+| `/projects/registry` | Auto-discover candidates dari supervisor + systemd + apache + ports + cron, adopt/edit/delete dengan modal 4-tab |
+| `/projects/activity` | Live event feed via SSE, fresh-flash animation, level/search filter, pause/clear |
+| `/projects/logs` | Multi-tail log viewer dengan project picker, level filter, regex grep, color-coded `[project-tag]`, auto-scroll |
+| `/projects/health` | Error inbox (signature-based dedup, ack/resolve/ignore), Alert rules (7 kinds, modal CRUD), Fire history, Webhook config |
+| `/projects/scheduler` | Aggregated scheduled jobs · scrapers + backup + internal tasks + system cron · Run Now button + countdown |
+| `/projects/audit` | Action history dengan filter project/action/result, expand JSON params, CSV export |
+
+### Adapters (5 kinds)
+
+| Kind | Source | Control |
+|------|--------|---------|
+| `supervisor` | XML-RPC ke `supervisord` | start/stop/restart |
+| `systemd` | `systemctl show` + journalctl | start/stop/restart |
+| `apache_vhost` | parse `/etc/apache2/sites-available/*` | enable/disable + `systemctl reload apache2` |
+| `port` | `psutil.net_connections` | read-only |
+| `custom` | user-defined `bash -c` commands | start/stop/status |
+
+### Background tasks
+
+Berjalan di asyncio event loop dashboard, started/stopped via FastAPI lifespan:
+
+- **Metrics collector** (30s) — sample CPU/RSS/state semua project, persist ke `project_metrics`, prune > 7 hari
+- **Event broker** (2s) — tail `project_events`, fan-out ke SSE subscribers
+- **Alert evaluator** (30s, dedupe 10m) — eval 7 rule kinds, fire webhook
+- **Log scanner** (20s) — tail file project, classify level, push errors ke inbox dengan signature hash, fire `log_pattern` rules
+
+### Alert kinds
+
+`rss_high` · `cpu_high` · `state_not` · `port_down` · `http_check` · `restart_count` · `log_pattern`
+
+### Webhook backends
+
+- **Discord** — rich embed dengan color-coded level + fields untuk state/cpu/rss/uptime
+- **Telegram** — shorthand `tg://<BOT_TOKEN>/<CHAT_ID>` (HTML-formatted message)
+- **Generic** — JSON POST untuk URL lain
+
+### DB tables
+
+`projects` · `project_events` · `project_metrics` · `project_actions` · `alert_rules` · `alert_history` · `error_inbox`
+
+### API endpoints (33 total)
+
+Lihat full list di section [API Endpoints](#-api-endpoints).
+
+---
+
+## 🍎 Komiku Scraper
 
 ### Stack
 - **Backend:** Python 3.11, FastAPI, Uvicorn
