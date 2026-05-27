@@ -1,0 +1,34 @@
+scraper:
+  base_url: "https://nhentai.net"
+  image_base: "https://i.nhentai.net"
+  thumb_base: "https://t.nhentai.net"
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  timeout: 15
+  retries: 3
+  per_request_proxy: true   # rotate proxy per request
+
+proxy_sources:
+  # Each source is best-effort; failures are skipped.
+  proxyscrape:
+    # tightened: timeout<5s, elite anonymity (no header leak), supports SSL CONNECT
+    url: "https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&format=text&timeout=5000&anonymity=elite&ssl=yes"
+    timeout: 10
+  geonode:
+    url: "https://proxylist.geonode.com/api/proxy-list?limit=100&page=1&sort_by=lastChecked&sort_type=desc&protocols=http%2Chttps&filterUpTime=70"
+    timeout: 10
+    # client-side filters applied after parse:
+    min_uptime: 70        # %, 0-100
+    max_latency: 2000     # ms
+  openproxyspace:
+    url: "https://api.openproxy.space/list/http"
+    timeout: 10
+  github_monosans:
+    # Auto-validated list, refreshed every ~10 minutes upstream
+    url: "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt"
+    timeout: 10
+
+# ── Quality filter (applied to all sources) ────
+quality:
+  # Limit total candidates returned to caller
+  default_limit: 100
+

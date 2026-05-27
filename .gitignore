@@ -18,6 +18,7 @@ __pycache__/
 # Logs
 logs/*.log
 *.log
+*.log.[0-9]*
 
 # Output files (scraped data, regenerated on each run)
 */output/*.json
@@ -26,10 +27,11 @@ logs/*.log
 .DS_Store
 Thumbs.db
 
-# IDE
+# IDE / local tooling
 .vscode/
 .idea/
 .claude/
+.opencode/
 
 # Secrets (if any)
 .env

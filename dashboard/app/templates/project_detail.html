@@ -1,0 +1,1022 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} — Project{% endblock %}
+{% block content %}
+
+{% set s = (card.status if card else {}) %}
+{% set health = (card.health if card else 'unknown') %}
+
+<style>
+.detail-hero {
+  position: relative;
+  padding: 22px 24px;
+  border-radius: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.detail-hero::before {
+  content: ''; position: absolute; inset: 0;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(6,182,212,0.06) 0%, transparent 40%),
+    radial-gradient(circle at 100% 100%, rgba(99,102,241,0.04) 0%, transparent 40%);
+  pointer-events: none;
+}
+.detail-hero.h-warning::before {
+  background: radial-gradient(circle at 0% 0%, rgba(245,158,11,0.08) 0%, transparent 40%);
+}
+.detail-hero.h-critical::before {
+  background: radial-gradient(circle at 0% 0%, rgba(239,68,68,0.1) 0%, transparent 40%);
+}
+.detail-spine {
+  position: absolute; left: 0; top: 14px; bottom: 14px;
+  width: 3px; border-radius: 0 3px 3px 0;
+}
+.detail-spine.h-healthy { background: var(--success); }
+.detail-spine.h-warning { background: var(--warning); }
+.detail-spine.h-critical { background: var(--danger); box-shadow: 0 0 16px rgba(239,68,68,0.4); }
+.detail-spine.h-unknown { background: var(--text-muted); }
+
+.label-tiny {
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
+.metric-num {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px; border-radius: 4px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 10px; font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.pill.healthy { color:#34d399; border-color:rgba(16,185,129,0.3); background:rgba(16,185,129,0.06); }
+.pill.warning { color:#fbbf24; border-color:rgba(245,158,11,0.3); background:rgba(245,158,11,0.06); }
+.pill.critical { color:#f87171; border-color:rgba(239,68,68,0.3); background:rgba(239,68,68,0.06); }
+
+.kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px dashed var(--border-subtle); font-size: 12px; }
+.kv-row:last-child { border-bottom: none; }
+.kv-row .k { color: var(--text-muted); font-family: 'Geist Mono', monospace; font-size: 11px; }
+.kv-row .v { color: var(--text-primary); text-align: right; font-family: 'Geist Mono', monospace; }
+
+.event-row {
+  display: grid;
+  grid-template-columns: 76px 80px 1fr;
+  gap: 10px; align-items: start;
+  padding: 6px 8px; border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+.event-row:last-child { border-bottom: none; }
+.event-row .ts { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--text-muted); }
+.event-row .lvl-info  { color: var(--text-secondary); }
+.event-row .lvl-warn  { color: #fbbf24; }
+.event-row .lvl-error,
+.event-row .lvl-critical { color: #f87171; }
+
+.tabbar {
+  display: flex; gap: 2px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-top: 12px;
+}
+.tabbar button {
+  padding: 8px 14px;
+  background: transparent; border: none;
+  color: var(--text-secondary);
+  font-size: 13px; font-weight: 500;
+  border-bottom: 2px solid transparent;
+  cursor: pointer; font-family: inherit;
+}
+.tabbar button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tabbar button:hover { color: var(--text-primary); }
+.tabbar button[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+.section-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.action-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 8px;
+  font-size: 13px; font-weight: 500;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer; font-family: inherit;
+  transition: all 150ms;
+}
+.action-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-muted); }
+.action-btn.danger:hover { border-color: rgba(239,68,68,0.4); color: #f87171; background: rgba(239,68,68,0.08); }
+.action-btn.primary { background: var(--accent); color: #0a0f1a; border-color: var(--accent); font-weight: 600; }
+.action-btn.primary:hover { background: var(--accent-hover); box-shadow: var(--accent-glow); }
+.action-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+.log-frame {
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-all;
+  max-height: 480px; overflow: auto;
+  background: #050912; color: #94a3b8;
+  padding: 14px 16px; border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+}
+.placeholder-soon {
+  border: 1px dashed var(--border-default);
+  border-radius: 12px;
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.cfg-tab-btn.active-cfg {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+#cfg-editor:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+.cfg-dirty #cfg-status { color: #fbbf24 !important; }
+
+/* ── Resource chart ─────────────────────────────── */
+.resource-chart {
+  position: relative;
+  width: 100%;
+  height: 160px;
+  background: linear-gradient(180deg, rgba(6,182,212,0.04) 0%, transparent 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.resource-chart svg { width: 100%; height: 100%; display: block; }
+.chart-legend {
+  position: absolute; top: 8px; right: 10px;
+  display: flex; gap: 12px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+}
+.chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.chart-legend .swatch { width: 8px; height: 2px; border-radius: 1px; }
+
+/* ── Streaming logs ─────────────────────────────── */
+.log-stream {
+  background: #050912;
+  color: #cbd5e1;
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px; line-height: 1.55;
+  height: 480px;
+  overflow-y: auto;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  padding: 8px 0;
+}
+.log-stream::-webkit-scrollbar { width: 8px; }
+.log-stream::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.18); border-radius: 4px; }
+.log-stream .log-line {
+  padding: 0 14px;
+  white-space: pre-wrap; word-break: break-all;
+  display: grid; grid-template-columns: 60px 1fr; gap: 12px;
+}
+.log-stream .log-line:hover { background: rgba(255,255,255,0.02); }
+.log-stream .log-line .ts { color: #475569; }
+.log-stream .log-line.lvl-warn  { color: #fbbf24; }
+.log-stream .log-line.lvl-error { color: #fca5a5; }
+.log-stream .log-line.lvl-critical { color: #fca5a5; font-weight: 600; }
+.log-stream .log-line.lvl-debug { color: #64748b; }
+.live-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  background: rgba(16,185,129,0.1);
+  border: 1px solid rgba(16,185,129,0.3);
+  color: #34d399;
+}
+.live-pill.dead { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); color: #f87171; }
+.live-pill.idle { background: var(--bg-elevated); border-color: var(--border-default); color: var(--text-muted); }
+.live-pill .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; animation: live-blink 1.4s infinite; }
+@keyframes live-blink { 0%,100%{opacity:1} 50%{opacity:0.35} }
+</style>
+
+<!-- Breadcrumb -->
+<div class="text-xs metric-num mb-3 flex items-center gap-1.5" style="color:var(--text-muted)">
+  <a href="/projects" class="hover:text-[var(--accent)]">Projects</a>
+  <i data-lucide="chevron-right" class="w-3 h-3"></i>
+  <span>{{ project.slug }}</span>
+</div>
+
+<!-- ── Hero ─────────────────────────────────────── -->
+<div class="detail-hero h-{{ health }} mb-5 fade-in">
+  <div class="detail-spine h-{{ health }}"></div>
+  <div class="relative flex flex-wrap items-start justify-between gap-4">
+    <div class="flex-1 min-w-0">
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        <span class="pill {{ health }}">
+          <span class="w-1.5 h-1.5 rounded-full" style="background:currentColor"></span>
+          {{ s.state if s and s.state else 'unknown' }}
+        </span>
+        <span class="pill"><i data-lucide="box" class="w-2.5 h-2.5"></i>{{ project.kind }}</span>
+        {% if project.expected_port %}
+        <span class="pill"><i data-lucide="plug" class="w-2.5 h-2.5"></i>:{{ project.expected_port }}</span>
+        {% endif %}
+        <span class="pill"><i data-lucide="shield" class="w-2.5 h-2.5"></i>{{ project.control }}</span>
+      </div>
+      <h1 class="text-2xl md:text-3xl font-semibold tracking-tight leading-tight">{{ project.name }}</h1>
+      {% if project.description %}
+      <p class="text-sm mt-1.5" style="color:var(--text-secondary)">{{ project.description }}</p>
+      {% endif %}
+      <div class="text-[11px] mt-2 metric-num" style="color:var(--text-muted)">
+        slug <span style="color:var(--text-secondary)">{{ project.slug }}</span> ·
+        source <span style="color:var(--text-secondary)">{{ project.source_ref }}</span>
+        {% if s and s.pid %} · pid <span style="color:var(--text-secondary)">{{ s.pid }}</span>{% endif %}
+        {% if s and s.uptime_str %} · up <span style="color:var(--text-secondary)">{{ s.uptime_str }}</span>{% endif %}
+      </div>
+      {% if project.tags %}
+      <div class="mt-2 flex flex-wrap gap-1">
+        {% for t in project.tags %}
+        <span class="pill" style="font-size:9px">{{ t }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Action toolbar -->
+    <div class="flex flex-wrap gap-2" id="action-bar">
+      {% if card and card.actions.can_start %}
+      <button class="action-btn primary" id="btn-start" onclick="doAction('start')">
+        <i data-lucide="play" class="w-3.5 h-3.5"></i> Start
+      </button>
+      {% endif %}
+      {% if card and card.actions.can_restart %}
+      <button class="action-btn" id="btn-restart" onclick="doAction('restart')">
+        <i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i> Restart
+      </button>
+      {% endif %}
+      {% if card and card.actions.can_stop %}
+      <button class="action-btn danger" id="btn-stop" onclick="doAction('stop')">
+        <i data-lucide="square" class="w-3.5 h-3.5"></i> Stop
+      </button>
+      {% endif %}
+      <a class="action-btn" href="/svc/{{ project.slug }}" title="Legacy service detail">
+        <i data-lucide="external-link" class="w-3.5 h-3.5"></i> Legacy
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tabs ─────────────────────────────────────── -->
+<div class="tabbar">
+  <button class="active" data-tab="overview" onclick="switchProjectTab('overview')">Overview</button>
+  <button data-tab="logs" onclick="switchProjectTab('logs')">Logs</button>
+  <button data-tab="events" onclick="switchProjectTab('events')">Events</button>
+  <button data-tab="config" onclick="switchProjectTab('config')">Config</button>
+  <button data-tab="alerts" onclick="switchProjectTab('alerts')">Alerts</button>
+  <button data-tab="audit" onclick="switchProjectTab('audit')">Audit</button>
+</div>
+
+<!-- ── Tab: Overview ─────────────────────────────── -->
+<div data-tab-panel="overview" class="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+  <!-- Resource (full row, with chart) -->
+  <div class="section-card md:col-span-3">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <div class="label-tiny">Resource · last 60 min</div>
+        <div class="text-[11px] metric-num mt-0.5" style="color:var(--text-muted)">
+          collected every 30s · <span id="metric-count">0</span> samples
+        </div>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <button class="action-btn sm" data-mwin="60" onclick="setMetricWindow(60)">1h</button>
+        <button class="action-btn sm" data-mwin="360" onclick="setMetricWindow(360)">6h</button>
+        <button class="action-btn sm" data-mwin="1440" onclick="setMetricWindow(1440)">24h</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-3 gap-3 mb-3">
+      <div>
+        <div class="label-tiny">cpu</div>
+        <div class="text-2xl metric-num" id="ov-cpu">{{ s.cpu_pct if s else 0 }}%</div>
+      </div>
+      <div>
+        <div class="label-tiny">memory rss</div>
+        <div class="text-2xl metric-num" id="ov-rss">{{ s.rss_mb if s else 0 }} MB</div>
+      </div>
+      <div>
+        <div class="label-tiny">uptime</div>
+        <div class="text-2xl metric-num" id="ov-uptime">{{ s.uptime_str if s and s.uptime_str else '—' }}</div>
+      </div>
+    </div>
+    <div class="resource-chart" id="resource-chart">
+      <div class="chart-legend">
+        <span><span class="swatch" style="background:#06b6d4"></span>cpu %</span>
+        <span><span class="swatch" style="background:#a855f7"></span>rss MB</span>
+      </div>
+      <svg id="rc-svg" viewBox="0 0 600 160" preserveAspectRatio="none"></svg>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="section-card">
+    <div class="label-tiny mb-2">Status</div>
+    <div class="space-y-2">
+      <div class="kv-row"><span class="k">state</span><span class="v" id="ov-state">{{ s.state if s and s.state else 'unknown' }}</span></div>
+      <div class="kv-row"><span class="k">pid</span><span class="v" id="ov-pid">{{ s.pid if s and s.pid else '—' }}</span></div>
+      <div class="kv-row"><span class="k">health</span><span class="v">{{ health }}</span></div>
+      <div class="kv-row"><span class="k">control</span><span class="v">{{ project.control }}</span></div>
+      <div class="kv-row"><span class="k">enabled</span><span class="v">{{ 'yes' if project.enabled else 'no' }}</span></div>
+    </div>
+  </div>
+
+  <!-- Identity -->
+  <div class="section-card">
+    <div class="label-tiny mb-2">Identity</div>
+    <div class="space-y-2">
+      <div class="kv-row"><span class="k">slug</span><span class="v">{{ project.slug }}</span></div>
+      <div class="kv-row"><span class="k">kind</span><span class="v">{{ project.kind }}</span></div>
+      <div class="kv-row"><span class="k">source</span><span class="v">{{ project.source_ref }}</span></div>
+      {% if project.expected_port %}
+      <div class="kv-row"><span class="k">port</span><span class="v">:{{ project.expected_port }}</span></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="section-card">
+    <div class="label-tiny mb-2">Quick links</div>
+    <div class="space-y-1">
+      <a href="/projects" class="block text-xs hover:text-[var(--accent)]" style="color:var(--text-secondary)">
+        <i data-lucide="arrow-left" class="w-3 h-3 inline-block -mt-0.5"></i> Kembali ke Project
+      </a>
+      <a href="/projects/notifications" class="block text-xs hover:text-[var(--accent)]" style="color:var(--text-secondary)">
+        <i data-lucide="bell" class="w-3 h-3 inline-block -mt-0.5"></i> Pemberitahuan
+      </a>
+      <a href="/projects/history" class="block text-xs hover:text-[var(--accent)]" style="color:var(--text-secondary)">
+        <i data-lucide="history" class="w-3 h-3 inline-block -mt-0.5"></i> Riwayat
+      </a>
+    </div>
+  </div>
+
+  {% if project.urls %}
+  <div class="section-card md:col-span-3">
+    <div class="label-tiny mb-2">Public URLs</div>
+    <div class="flex flex-wrap gap-2">
+      {% for u in project.urls %}
+      <a href="{{ u }}" target="_blank" rel="noopener"
+         class="pill" style="padding:5px 10px;font-size:11px">
+        <i data-lucide="external-link" class="w-3 h-3"></i>{{ u }}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if s and s.extra and s.extra.spawnerr %}
+  <div class="md:col-span-3 px-4 py-3 rounded-lg text-sm flex items-start gap-2"
+       style="background:rgba(239,68,68,0.08);color:#f87171;border:1px solid rgba(239,68,68,0.2)">
+    <i data-lucide="alert-triangle" class="w-4 h-4 flex-shrink-0 mt-0.5"></i>
+    <div>
+      <div class="font-semibold mb-0.5">Last error</div>
+      <code class="text-xs metric-num">{{ s.extra.spawnerr }}</code>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Recent actions -->
+  {% if actions %}
+  <div class="section-card md:col-span-3">
+    <div class="flex items-center justify-between mb-2">
+      <div class="label-tiny">Recent actions</div>
+      <span class="text-[10px] metric-num" style="color:var(--text-muted)">{{ actions|length }} entries</span>
+    </div>
+    <div class="space-y-0">
+      {% for a in actions[:8] %}
+      <div class="event-row">
+        <span class="ts">{{ a.ts.split('.')[0] if a.ts else '' }}</span>
+        <span class="metric-num text-[10px] uppercase {% if a.result=='ok' %}lvl-info{% else %}lvl-error{% endif %}">{{ a.action }}</span>
+        <span style="color:var(--text-secondary)">
+          <span style="color:var(--text-muted)">{{ a.actor }}</span> ·
+          {{ a.message }}
+          {% if a.duration_ms %}<span class="ml-1" style="color:var(--text-muted)">({{ a.duration_ms }}ms)</span>{% endif %}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── Tab: Logs ──────────────────────────────────── -->
+<div data-tab-panel="logs" class="mt-5 hidden">
+  <div class="section-card">
+    <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+      <div>
+        <div class="label-tiny">Live tail</div>
+        <div class="text-[11px] metric-num mt-0.5" style="color:var(--text-muted)">
+          {% if project.log_paths %}{{ project.log_paths|join(' · ') }}
+          {% elif project.kind == 'systemd' %}journalctl -u {{ project.source_ref.split(':')[1] if ':' in project.source_ref else project.source_ref }}
+          {% else %}no log source{% endif %}
+        </div>
+      </div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <span id="log-live" class="live-pill idle"><span class="dot"></span><span id="log-live-label">IDLE</span></span>
+        <input id="log-grep" placeholder="grep…"
+               class="px-3 py-1 text-xs rounded-lg outline-none"
+               style="background:var(--bg-base);border:1px solid var(--border-default);color:var(--text-primary);width:160px;font-family:'Geist Mono',monospace"
+               oninput="renderLogStream()">
+        <label class="flex items-center gap-1.5 text-[11px]" style="color:var(--text-secondary)">
+          <input type="checkbox" id="log-autoscroll" checked> auto-scroll
+        </label>
+        <button class="action-btn sm" onclick="toggleLogStream()" id="log-toggle-btn">
+          <i data-lucide="play" class="w-3 h-3"></i> Start
+        </button>
+        <button class="action-btn sm" onclick="clearLogStream()">
+          <i data-lucide="eraser" class="w-3 h-3"></i> Clear
+        </button>
+      </div>
+    </div>
+    <div id="log-stream" class="log-stream">
+      <div style="padding:30px;text-align:center;color:#475569;font-family:'Geist Mono',monospace;font-size:12px">
+        Click <strong>Start</strong> to stream live logs
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tab: Events ────────────────────────────────── -->
+<div data-tab-panel="events" class="mt-5 hidden">
+  <div class="section-card">
+    <div class="flex items-center justify-between mb-3">
+      <div class="label-tiny">Event timeline</div>
+      <span class="text-[10px] metric-num" style="color:var(--text-muted)">{{ events|length }} entries</span>
+    </div>
+    {% if events %}
+    <div>
+      {% for e in events %}
+      <div class="event-row">
+        <span class="ts">{{ e.ts.split('.')[0] if e.ts else '' }}</span>
+        <span class="metric-num text-[10px] uppercase lvl-{{ e.level }}">{{ e.kind }}</span>
+        <span style="color:var(--text-secondary)">{{ e.message }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="placeholder-soon">
+      No events recorded yet for this project.
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── Tab: Config ─────────────────────────────── -->
+<div data-tab-panel="config" class="mt-5 hidden">
+  <div class="section-card">
+    {% if project.config_paths %}
+      <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <div class="flex flex-wrap gap-1.5" id="cfg-tabs">
+          {% for path in project.config_paths %}
+          <button class="action-btn sm cfg-tab-btn{% if loop.first %} active-cfg{% endif %}"
+                  data-cfg-path="{{ path }}"
+                  onclick="loadConfig('{{ path|e }}')">
+            <i data-lucide="file-text" class="w-3 h-3"></i>
+            {{ path.split('/')[-1] }}
+          </button>
+          {% endfor %}
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="cfg-status" class="text-[11px] metric-num" style="color:var(--text-muted)"></span>
+          <button class="action-btn sm" onclick="reloadConfig()">
+            <i data-lucide="rotate-cw" class="w-3 h-3"></i> Reload
+          </button>
+          <button class="action-btn sm primary" onclick="saveConfig()">
+            <i data-lucide="save" class="w-3 h-3"></i> Save
+          </button>
+        </div>
+      </div>
+      <div class="text-[11px] metric-num mb-2" id="cfg-current-path" style="color:var(--text-muted)">
+        {{ project.config_paths[0] }}
+      </div>
+      <textarea id="cfg-editor" spellcheck="false"
+                style="width:100%;min-height:420px;padding:14px;background:#050912;color:#e2e8f0;border:1px solid var(--border-subtle);border-radius:10px;font-family:'Geist Mono',monospace;font-size:12px;line-height:1.55;outline:none;resize:vertical"></textarea>
+      <div class="text-[11px] mt-2 flex items-start gap-1.5" style="color:var(--text-muted)">
+        <i data-lucide="info" class="w-3 h-3 flex-shrink-0 mt-0.5"></i>
+        <span>
+          Whitelisted paths only. Changes are validated where possible (e.g. apache vhosts auto-rollback on syntax error).
+          For supervisor scrapers, you may need to <strong>Restart</strong> the service for changes to take effect.
+        </span>
+      </div>
+    {% else %}
+    <div class="placeholder-soon">
+      <i data-lucide="file-x" class="w-5 h-5 mx-auto mb-2 opacity-50"></i>
+      <div>No config paths configured for this project.</div>
+      <div class="text-[11px] mt-1">Path baru bisa ditambahkan via tombol <strong>…</strong> di card project (overview).</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── Tab: Alerts ────────────────────────────── -->
+<div data-tab-panel="alerts" class="mt-5 hidden">
+  <div class="section-card">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <div class="label-tiny">Alert rules for this project</div>
+        <div class="text-[11px] metric-num mt-0.5" style="color:var(--text-muted)">
+          Configure conditions that fire webhooks when this project misbehaves
+        </div>
+      </div>
+      <a href="/projects/notifications" class="action-btn sm">
+        <i data-lucide="external-link" class="w-3 h-3"></i> Buka Pemberitahuan
+      </a>
+    </div>
+    <div id="alerts-list">
+      <div class="text-sm py-6 text-center" style="color:var(--text-muted)">loading rules…</div>
+    </div>
+    <div class="text-[11px] mt-3 flex items-start gap-1.5" style="color:var(--text-muted)">
+      <i data-lucide="info" class="w-3 h-3 flex-shrink-0 mt-0.5"></i>
+      <span>
+        Background evaluator scans all rules every 30s. To create or edit rules,
+        go to <a href="/projects/notifications" style="color:var(--accent)">Pemberitahuan</a>.
+      </span>
+    </div>
+  </div>
+
+  <div class="section-card mt-3">
+    <div class="label-tiny mb-2">Recent error inbox entries</div>
+    <div id="alerts-inbox">
+      <div class="text-sm py-3 text-center text-[12px]" style="color:var(--text-muted)">loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tab: Audit ────────────────────────────── -->
+<div data-tab-panel="audit" class="mt-5 hidden">
+  <div class="section-card">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <div class="label-tiny">Action history for this project</div>
+        <div class="text-[11px] metric-num mt-0.5" style="color:var(--text-muted)">
+          Read-only · last 50 entries
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <a href="/projects/history" class="action-btn sm">
+          <i data-lucide="external-link" class="w-3 h-3"></i> Riwayat lengkap
+        </a>
+        <button class="action-btn sm" onclick="exportAuditCsv()">
+          <i data-lucide="download" class="w-3 h-3"></i> CSV
+        </button>
+      </div>
+    </div>
+    <div id="audit-list-tab">
+      <div class="text-sm py-6 text-center" style="color:var(--text-muted)">loading…</div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PROJ_SLUG = {{ project.slug|tojson }};
+
+function switchProjectTab(name) {
+  document.querySelectorAll('.tabbar button').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('[data-tab-panel]').forEach(p =>
+    p.classList.toggle('hidden', p.dataset.tabPanel !== name));
+  if (window.lucide) lucide.createIcons();
+}
+
+async function doAction(action) {
+  const verb = action.charAt(0).toUpperCase() + action.slice(1);
+  if (action === 'stop' && !confirm(`${verb} "${PROJ_SLUG}"?`)) return;
+  toast(`${verb}ing…`, 'info');
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(PROJ_SLUG)}/action`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action})
+    });
+    const j = await r.json();
+    toast(j.message || (j.ok ? 'ok' : 'failed'), j.ok ? 'success' : 'error');
+    setTimeout(() => location.reload(), 700);
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+// Live overview metrics — poll every 5s
+async function refreshOverview() {
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(PROJ_SLUG)}`);
+    if (!r.ok) return;
+    const j = await r.json();
+    const s = (j.card && j.card.status) || {};
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('ov-cpu', (s.cpu_pct||0).toFixed(1) + '%');
+    set('ov-rss', (s.rss_mb||0) + ' MB');
+    set('ov-pid', s.pid || '—');
+    set('ov-uptime', s.uptime_str || '—');
+    set('ov-state', s.state || 'unknown');
+  } catch (e) { /* ignore */ }
+}
+setInterval(() => { if (document.visibilityState === 'visible') refreshOverview(); }, 5000);
+
+// ── Config tab ─────────────────────────────────
+let CFG_CURRENT_PATH = null;
+let CFG_LOADED_CONTENT = '';
+
+async function loadConfig(path) {
+  if (!path) return;
+  CFG_CURRENT_PATH = path;
+  document.querySelectorAll('.cfg-tab-btn').forEach(b =>
+    b.classList.toggle('active-cfg', b.dataset.cfgPath === path));
+  const ed = document.getElementById('cfg-editor');
+  const status = document.getElementById('cfg-status');
+  const pathEl = document.getElementById('cfg-current-path');
+  if (pathEl) pathEl.textContent = path;
+  if (ed) { ed.value = ''; ed.disabled = true; }
+  if (status) status.textContent = 'loading…';
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(PROJ_SLUG)}/config?path=${encodeURIComponent(path)}`);
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      if (status) status.textContent = 'load failed: ' + (j.error || r.status);
+      ed.value = '(' + (j.error || 'load failed') + ')';
+      return;
+    }
+    ed.value = j.content || '';
+    CFG_LOADED_CONTENT = j.content || '';
+    ed.disabled = false;
+    if (status) status.textContent = 'clean · ' + (j.content || '').length + ' chars';
+    document.querySelector('[data-tab-panel="config"]')?.classList.remove('cfg-dirty');
+  } catch (e) {
+    if (status) status.textContent = 'error: ' + e.message;
+  }
+}
+
+function reloadConfig() {
+  if (CFG_CURRENT_PATH) loadConfig(CFG_CURRENT_PATH);
+}
+
+async function saveConfig() {
+  if (!CFG_CURRENT_PATH) return;
+  const ed = document.getElementById('cfg-editor');
+  const status = document.getElementById('cfg-status');
+  const content = ed ? ed.value : '';
+  if (status) status.textContent = 'saving…';
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(PROJ_SLUG)}/config`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({path: CFG_CURRENT_PATH, content}),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      toast(j.message || j.error || 'save failed', 'error');
+      if (status) status.textContent = 'save failed';
+      return;
+    }
+    toast(j.message || 'saved', 'success');
+    CFG_LOADED_CONTENT = content;
+    if (status) status.textContent = 'saved · ' + content.length + ' chars · ' + (j.duration_ms || 0) + 'ms';
+    document.querySelector('[data-tab-panel="config"]')?.classList.remove('cfg-dirty');
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Auto-load first config path when Config tab opens for first time
+  const ed = document.getElementById('cfg-editor');
+  if (ed) {
+    ed.addEventListener('input', () => {
+      const status = document.getElementById('cfg-status');
+      const dirty = ed.value !== CFG_LOADED_CONTENT;
+      if (status) status.textContent = dirty ? 'unsaved · ' + ed.value.length + ' chars' : 'clean · ' + ed.value.length + ' chars';
+      document.querySelector('[data-tab-panel="config"]')?.classList.toggle('cfg-dirty', dirty);
+    });
+    // Auto-load first config path immediately
+    const first = document.querySelector('.cfg-tab-btn');
+    if (first) loadConfig(first.dataset.cfgPath);
+  }
+  // Initial load of resource chart
+  loadMetrics(60);
+});
+
+// ── Resource time-series chart ────────────────
+let METRIC_WINDOW = 60;
+let METRIC_DATA = [];
+
+function setMetricWindow(minutes) {
+  METRIC_WINDOW = minutes;
+  document.querySelectorAll('[data-mwin]').forEach(b =>
+    b.style.background = (parseInt(b.dataset.mwin) === minutes) ? 'var(--accent-muted)' : '');
+  document.querySelectorAll('[data-mwin]').forEach(b =>
+    b.style.color = (parseInt(b.dataset.mwin) === minutes) ? 'var(--accent)' : '');
+  loadMetrics(minutes);
+}
+
+async function loadMetrics(minutes) {
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(PROJ_SLUG)}/metrics?minutes=${minutes}`);
+    if (!r.ok) return;
+    const j = await r.json();
+    METRIC_DATA = j.points || [];
+    document.getElementById('metric-count').textContent = METRIC_DATA.length;
+    drawChart();
+  } catch (e) { /* ignore */ }
+}
+
+function drawChart() {
+  const svg = document.getElementById('rc-svg');
+  if (!svg) return;
+  const W = 600, H = 160, pad = 14;
+
+  if (METRIC_DATA.length < 2) {
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle"
+                       fill="var(--text-muted)" font-family="Geist Mono" font-size="11">
+                       collecting data… (need 2+ samples)
+                     </text>`;
+    return;
+  }
+
+  const cpu = METRIC_DATA.map(p => p.cpu_pct || 0);
+  const rss = METRIC_DATA.map(p => p.rss_mb || 0);
+  const cpuMax = Math.max(...cpu, 5);   // floor 5% so the line doesn't look spiky on idle
+  const rssMax = Math.max(...rss, 1);
+
+  const stepX = (W - pad*2) / (METRIC_DATA.length - 1);
+  const cpuPts = cpu.map((v, i) => {
+    const x = pad + i * stepX;
+    const y = H - pad - (v / cpuMax) * (H - pad*2);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  const rssPts = rss.map((v, i) => {
+    const x = pad + i * stepX;
+    const y = H - pad - (v / rssMax) * (H - pad*2);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+
+  // gridlines
+  const gridY = [0.25, 0.5, 0.75].map(p => {
+    const y = pad + p * (H - pad*2);
+    return `<line x1="${pad}" y1="${y}" x2="${W-pad}" y2="${y}"
+              stroke="var(--grid-line)" stroke-width="1" stroke-dasharray="2 4"/>`;
+  }).join('');
+
+  // First & last timestamps
+  const firstTs = METRIC_DATA[0]?.ts ? String(METRIC_DATA[0].ts).slice(11, 16) : '';
+  const lastTs  = METRIC_DATA[METRIC_DATA.length-1]?.ts ? String(METRIC_DATA[METRIC_DATA.length-1].ts).slice(11, 16) : '';
+
+  svg.innerHTML = `
+    ${gridY}
+    <polyline points="${cpuPts}" fill="none" stroke="#06b6d4" stroke-width="1.5"
+              stroke-linejoin="round" stroke-linecap="round"/>
+    <polyline points="${rssPts}" fill="none" stroke="#a855f7" stroke-width="1.5"
+              stroke-linejoin="round" stroke-linecap="round"
+              opacity="0.85"/>
+    <text x="${pad+2}"   y="${H-3}" font-family="Geist Mono" font-size="9" fill="var(--text-muted)">${firstTs}</text>
+    <text x="${W-pad-2}" y="${H-3}" font-family="Geist Mono" font-size="9" fill="var(--text-muted)" text-anchor="end">${lastTs}</text>
+    <text x="${pad+2}"   y="${pad+8}" font-family="Geist Mono" font-size="9" fill="#06b6d4">cpu max ${cpuMax.toFixed(1)}%</text>
+    <text x="${pad+2}"   y="${pad+22}" font-family="Geist Mono" font-size="9" fill="#a855f7">rss max ${rssMax.toFixed(0)} MB</text>
+  `;
+}
+
+// Refresh chart with overview poll
+setInterval(() => {
+  if (document.visibilityState === 'visible') loadMetrics(METRIC_WINDOW);
+}, 30000);
+
+// ── Live log streaming ────────────────────────
+const LOG_STATE = {
+  source: null,
+  lines: [],   // {ts, level, line, source}
+  maxBuffer: 1000,
+  grep: '',
+};
+
+function setLogLive(state) {
+  const pill = document.getElementById('log-live');
+  const lbl = document.getElementById('log-live-label');
+  if (!pill) return;
+  pill.classList.remove('dead','idle');
+  if (state === 'dead') { pill.classList.add('dead'); lbl.textContent = 'DISCONNECTED'; }
+  else if (state === 'idle') { pill.classList.add('idle'); lbl.textContent = 'IDLE'; }
+  else if (state === 'connecting') { lbl.textContent = 'CONNECTING'; }
+  else { lbl.textContent = 'LIVE'; }
+}
+
+function escapeHtmlLog(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function fmtLogTs(t) {
+  if (!t) return '';
+  if (typeof t === 'number') {
+    return new Date(t * 1000).toTimeString().slice(0, 8);
+  }
+  return String(t).slice(11, 19);
+}
+
+function renderLogStream() {
+  LOG_STATE.grep = (document.getElementById('log-grep')?.value || '').toLowerCase();
+  const out = document.getElementById('log-stream');
+  if (!out) return;
+  const filtered = LOG_STATE.grep
+    ? LOG_STATE.lines.filter(l => l.line.toLowerCase().includes(LOG_STATE.grep))
+    : LOG_STATE.lines;
+  if (filtered.length === 0) {
+    out.innerHTML = `<div style="padding:30px;text-align:center;color:#475569;font-family:'Geist Mono',monospace;font-size:12px">
+      ${LOG_STATE.lines.length === 0 ? 'No log lines yet · streaming…' : 'No lines match the filter'}
+    </div>`;
+    return;
+  }
+  const slice = filtered.slice(-600);
+  out.innerHTML = slice.map(l => `
+    <div class="log-line lvl-${l.level}">
+      <span class="ts">${escapeHtmlLog(fmtLogTs(l.ts))}</span>
+      <span>${escapeHtmlLog(l.line)}</span>
+    </div>
+  `).join('');
+  if (document.getElementById('log-autoscroll')?.checked) {
+    out.scrollTop = out.scrollHeight;
+  }
+}
+
+function pushLogLine(p) {
+  LOG_STATE.lines.push(p);
+  if (LOG_STATE.lines.length > LOG_STATE.maxBuffer) {
+    LOG_STATE.lines.splice(0, LOG_STATE.lines.length - LOG_STATE.maxBuffer);
+  }
+  renderLogStream();
+}
+
+function startLogStream() {
+  stopLogStream();
+  setLogLive('connecting');
+  const src = new EventSource(`/api/projects/${encodeURIComponent(PROJ_SLUG)}/logs/tail?initial_lines=100`);
+  LOG_STATE.source = src;
+  src.onopen = () => setLogLive('live');
+  src.onmessage = (msg) => {
+    if (!msg.data) return;
+    try {
+      const p = JSON.parse(msg.data);
+      pushLogLine(p);
+    } catch (_) {}
+  };
+  src.onerror = () => {
+    setLogLive('dead');
+    src.close();
+    LOG_STATE.source = null;
+    document.getElementById('log-toggle-btn').innerHTML = '<i data-lucide="play" class="w-3 h-3"></i> Start';
+    if (window.lucide) lucide.createIcons();
+  };
+  document.getElementById('log-toggle-btn').innerHTML = '<i data-lucide="square" class="w-3 h-3"></i> Stop';
+  if (window.lucide) lucide.createIcons();
+}
+
+function stopLogStream() {
+  if (LOG_STATE.source) {
+    try { LOG_STATE.source.close(); } catch(_) {}
+    LOG_STATE.source = null;
+  }
+  setLogLive('idle');
+  const btn = document.getElementById('log-toggle-btn');
+  if (btn) btn.innerHTML = '<i data-lucide="play" class="w-3 h-3"></i> Start';
+  if (window.lucide) lucide.createIcons();
+}
+
+function toggleLogStream() {
+  if (LOG_STATE.source) stopLogStream();
+  else startLogStream();
+}
+
+function clearLogStream() {
+  LOG_STATE.lines = [];
+  renderLogStream();
+}
+
+// Auto-start log stream when Logs tab is opened first time
+let _logsAutoStarted = false;
+const _origSwitchTab = switchProjectTab;
+switchProjectTab = function(name) {
+  _origSwitchTab(name);
+  if (name === 'logs' && !_logsAutoStarted) {
+    _logsAutoStarted = true;
+    startLogStream();
+  }
+  if (name === 'alerts') loadAlertsTab();
+  if (name === 'audit') loadAuditTab();
+};
+
+// ── Audit tab ───────────────────────────────
+async function loadAuditTab() {
+  try {
+    const r = await fetch('/api/projects/audit?limit=50&project_slug=' + encodeURIComponent(PROJ_SLUG));
+    const j = await r.json();
+    const list = document.getElementById('audit-list-tab');
+    const items = j.items || [];
+    if (!items.length) {
+      list.innerHTML = '<div class="text-sm py-8 text-center" style="color:var(--text-muted)">No actions logged for this project yet</div>';
+      return;
+    }
+    list.innerHTML = items.map(it => {
+      const dur = it.duration_ms ? `${it.duration_ms}ms` : '—';
+      const resultColor = it.result === 'ok' ? '#34d399' : '#f87171';
+      return `
+        <div class="event-row" style="grid-template-columns:130px 90px 1fr 80px;cursor:pointer" onclick="this.classList.toggle('expanded')">
+          <span class="ts">${String(it.ts||'').replace('T',' ').slice(0,19)}</span>
+          <span class="metric-num text-[10px] uppercase">${(it.action||'').replace(/[<>&]/g,'')}</span>
+          <span style="color:var(--text-secondary)">
+            <span style="color:var(--text-muted)">${(it.actor||'').replace(/[<>&]/g,'')}</span>
+            · ${(it.message||'').replace(/[<>&]/g,'')}
+          </span>
+          <span class="text-right metric-num text-[10px]" style="color:${resultColor}">
+            ${(it.result||'').replace(/[<>&]/g,'')} · ${dur}
+          </span>
+        </div>
+      `;
+    }).join('');
+  } catch (e) { /* ignore */ }
+}
+
+function exportAuditCsv() {
+  window.location.href = '/api/projects/audit?format=csv&limit=500&project_slug=' + encodeURIComponent(PROJ_SLUG);
+}
+
+// ── Alerts tab ──────────────────────────────
+async function loadAlertsTab() {
+  // Find this project's id from the page header card
+  let proj = null;
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(PROJ_SLUG)}`);
+    proj = await r.json();
+  } catch (_) { return; }
+  const pid = proj && proj.project ? proj.project.id : null;
+
+  // Rules
+  try {
+    const r = await fetch('/api/projects/alert-rules' + (pid ? '?project_id=' + pid : ''));
+    const j = await r.json();
+    const list = document.getElementById('alerts-list');
+    const rules = (j.rules || []).filter(rr => !pid || rr.project_id === pid);
+    if (!rules.length) {
+      list.innerHTML = `<div class="placeholder-soon">
+        <i data-lucide="bell-off" class="w-5 h-5 mx-auto mb-2 opacity-50"></i>
+        <div>No alert rules for this project yet.</div>
+        <a href="/projects/notifications" class="action-btn sm primary mt-3">
+          <i data-lucide="plus" class="w-3 h-3"></i> Atur pemberitahuan
+        </a>
+      </div>`;
+    } else {
+      list.innerHTML = rules.map(rr => {
+        const cond = JSON.stringify(rr.condition || {});
+        const lastFired = rr.last_fired_at ? `<span style="color:#fbbf24">last fired ${String(rr.last_fired_at).replace('T',' ').slice(0,19)} · ${rr.fire_count} times</span>` : '<span style="color:var(--text-muted)">never fired</span>';
+        return `
+          <div class="grid items-start gap-3 py-2.5" style="grid-template-columns:1fr 100px 90px;border-bottom:1px solid var(--border-subtle)">
+            <div>
+              <div class="text-sm font-semibold flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full" style="background:${rr.enabled?'#10b981':'var(--text-muted)'}"></span>
+                ${(rr.name||'').replace(/[<>&]/g,'')}
+              </div>
+              <div class="text-[11px] metric-num mt-1" style="color:var(--text-muted)">
+                <code style="color:var(--text-secondary)">${(cond||'').replace(/[<>&]/g,'')}</code>
+              </div>
+              <div class="text-[10px] metric-num mt-1">${lastFired}</div>
+            </div>
+            <span class="metric-num text-xs">${rr.kind}</span>
+            <span class="metric-num text-xs ${rr.enabled?'':'opacity-50'}">${rr.enabled?'enabled':'disabled'}</span>
+          </div>
+        `;
+      }).join('');
+    }
+  } catch (_) {}
+
+  // Project-specific inbox
+  try {
+    const r = await fetch('/api/projects/health/inbox?status=open&project_slug=' + encodeURIComponent(PROJ_SLUG) + '&limit=20');
+    const j = await r.json();
+    const list = document.getElementById('alerts-inbox');
+    const items = j.items || [];
+    if (!items.length) {
+      list.innerHTML = '<div class="text-sm py-3 text-center" style="color:var(--text-muted)">No open errors for this project</div>';
+    } else {
+      list.innerHTML = items.map(it => `
+        <div class="event-row">
+          <span class="ts">${String(it.last_seen||'').replace('T',' ').slice(0,19)}</span>
+          <span class="metric-num text-[10px] uppercase lvl-${it.level||'error'}">×${it.count}</span>
+          <span style="color:var(--text-secondary)">${(it.sample_message||'').slice(0,180).replace(/[<>&]/g,'')}</span>
+        </div>
+      `).join('');
+    }
+  } catch (_) {}
+  if (window.lucide) lucide.createIcons();
+}
+</script>
+{% endblock %}

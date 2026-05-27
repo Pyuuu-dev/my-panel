@@ -209,6 +209,141 @@ CREATE TABLE IF NOT EXISTS backup_log (
     trigger TEXT DEFAULT 'manual'
 );
 
+-- Proxy pool (used by nhentai client; rotator)
+CREATE TABLE IF NOT EXISTS proxy_pool (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scheme TEXT NOT NULL DEFAULT 'http',
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    username TEXT DEFAULT '',
+    password TEXT DEFAULT '',
+    source TEXT DEFAULT 'manual',
+    enabled INTEGER DEFAULT 1,
+    fail_count INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    last_status TEXT DEFAULT '',
+    last_used_at TIMESTAMP,
+    last_tested_at TIMESTAMP,
+    latency_ms INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(scheme, host, port)
+);
+CREATE INDEX IF NOT EXISTS idx_proxy_enabled ON proxy_pool(enabled, last_used_at);
+
+-- ── Projects Monitoring & Management (Phase 1+) ─────────
+-- Registry of tracked projects (server-wide control plane)
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'supervisor',  -- supervisor|systemd|apache_vhost|port|cron|custom
+    source_ref TEXT NOT NULL DEFAULT '',      -- 'supervisor:dashboard', 'systemd:apache2.service', etc.
+    description TEXT DEFAULT '',
+    icon TEXT DEFAULT '',                      -- lucide icon name
+    tags TEXT DEFAULT '[]',                    -- JSON array
+    log_paths TEXT DEFAULT '[]',               -- JSON array of file paths
+    urls TEXT DEFAULT '[]',                    -- JSON array of public URLs
+    health_endpoint TEXT DEFAULT '',
+    expected_port INTEGER,
+    config_paths TEXT DEFAULT '[]',            -- JSON array of config files
+    control TEXT DEFAULT 'full',               -- read|restart|full
+    custom_start TEXT DEFAULT '',              -- for kind=custom
+    custom_stop TEXT DEFAULT '',
+    custom_status TEXT DEFAULT '',
+    pinned INTEGER DEFAULT 0,
+    sort_order INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Activity / event feed per project
+CREATE TABLE IF NOT EXISTS project_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    level TEXT NOT NULL DEFAULT 'info',         -- info|warn|error|critical
+    kind TEXT NOT NULL,                          -- status|action|scrape|alert|log
+    message TEXT NOT NULL,
+    meta TEXT DEFAULT '{}'                       -- JSON
+);
+
+-- Time-series resource metrics (rolling ~7 days)
+CREATE TABLE IF NOT EXISTS project_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    cpu_pct REAL DEFAULT 0,
+    rss_mb REAL DEFAULT 0,
+    status TEXT DEFAULT 'unknown'                -- running|stopped|fatal|unknown
+);
+
+-- Audit log of all actions performed via dashboard
+CREATE TABLE IF NOT EXISTS project_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    project_slug TEXT NOT NULL DEFAULT '',
+    actor TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,                        -- start|stop|restart|config_save|register|delete|...
+    params TEXT DEFAULT '{}',
+    result TEXT NOT NULL DEFAULT 'ok',           -- ok|error
+    duration_ms INTEGER DEFAULT 0,
+    message TEXT DEFAULT ''
+);
+
+-- Alert rules per project (Phase 4 will populate; table created now to avoid future migration)
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,                          -- restart_count|no_event|rss_high|cpu_high|port_down|http_check
+    condition TEXT NOT NULL DEFAULT '{}',        -- JSON
+    webhook_url TEXT DEFAULT '',
+    enabled INTEGER DEFAULT 1,
+    last_fired_at TIMESTAMP,
+    fire_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS alert_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id INTEGER REFERENCES alert_rules(id) ON DELETE CASCADE,
+    fired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    snapshot TEXT DEFAULT '{}',
+    resolved_at TIMESTAMP
+);
+
+-- Error inbox: aggregated errors grouped by signature
+CREATE TABLE IF NOT EXISTS error_inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signature TEXT NOT NULL UNIQUE,        -- hash of normalized message
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    project_slug TEXT NOT NULL DEFAULT '',
+    level TEXT NOT NULL DEFAULT 'error',
+    sample_message TEXT NOT NULL DEFAULT '',
+    count INTEGER NOT NULL DEFAULT 1,
+    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'open',    -- open | acknowledged | resolved | ignored
+    ack_at TIMESTAMP,
+    ack_by TEXT DEFAULT '',
+    resolved_at TIMESTAMP,
+    notes TEXT DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_error_inbox_status ON error_inbox(status, last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_error_inbox_project ON error_inbox(project_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_projects_slug ON projects(slug);
+CREATE INDEX IF NOT EXISTS idx_projects_kind ON projects(kind, enabled);
+CREATE INDEX IF NOT EXISTS idx_project_events_project_ts ON project_events(project_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_project_events_ts ON project_events(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_project_metrics_project_ts ON project_metrics(project_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_project_actions_ts ON project_actions(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_project ON alert_rules(project_id, enabled);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_komik_title ON komik(title);
 CREATE INDEX IF NOT EXISTS idx_komik_source ON komik(source);
@@ -703,5 +838,643 @@ def get_backup_log(db: sqlite3.Connection, limit: int = 10) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ── Proxy Pool (for nhentai rotator) ──────────────────────
+PROXY_POOL_MAX = 20
+PROXY_FAIL_THRESHOLD = 3
+
+
+def proxy_count(db: sqlite3.Connection, only_enabled: bool = False) -> int:
+    """Total proxy in pool. only_enabled=True counts enabled only."""
+    if only_enabled:
+        row = db.execute("SELECT COUNT(*) AS c FROM proxy_pool WHERE enabled=1").fetchone()
+    else:
+        row = db.execute("SELECT COUNT(*) AS c FROM proxy_pool").fetchone()
+    return int(row["c"]) if row else 0
+
+
+def proxy_list(db: sqlite3.Connection, only_enabled: bool = False) -> list[dict]:
+    """List all proxies, ordered by id ASC."""
+    if only_enabled:
+        rows = db.execute("SELECT * FROM proxy_pool WHERE enabled=1 ORDER BY id ASC").fetchall()
+    else:
+        rows = db.execute("SELECT * FROM proxy_pool ORDER BY id ASC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def proxy_add(db: sqlite3.Connection, scheme: str, host: str, port: int,
+              username: str = "", password: str = "", source: str = "manual") -> int:
+    """Insert a new proxy. Returns proxy_id, or 0 if duplicate, or -1 if pool full."""
+    if proxy_count(db) >= PROXY_POOL_MAX:
+        return -1
+    scheme = (scheme or "http").lower()
+    if scheme not in ("http", "https", "socks4", "socks5"):
+        scheme = "http"
+    try:
+        db.execute("""
+            INSERT INTO proxy_pool (scheme, host, port, username, password, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (scheme, host, int(port), username or "", password or "", source or "manual"))
+        db.commit()
+        return int(db.execute("SELECT last_insert_rowid()").fetchone()[0])
+    except sqlite3.IntegrityError:
+        return 0
+
+
+def proxy_remove(db: sqlite3.Connection, proxy_id: int) -> bool:
+    """Delete a proxy by id."""
+    db.execute("DELETE FROM proxy_pool WHERE id=?", (proxy_id,))
+    db.commit()
+    return True
+
+
+def proxy_clear_disabled(db: sqlite3.Connection) -> int:
+    """Bulk delete all disabled proxies. Returns count removed."""
+    cur = db.execute("DELETE FROM proxy_pool WHERE enabled=0")
+    db.commit()
+    return cur.rowcount or 0
+
+
+def proxy_set_enabled(db: sqlite3.Connection, proxy_id: int, enabled: bool):
+    """Manually enable/disable a proxy. Resets fail_count when enabling."""
+    if enabled:
+        db.execute("UPDATE proxy_pool SET enabled=1, fail_count=0 WHERE id=?", (proxy_id,))
+    else:
+        db.execute("UPDATE proxy_pool SET enabled=0 WHERE id=?", (proxy_id,))
+    db.commit()
+
+
+def proxy_get_next(db: sqlite3.Connection) -> dict | None:
+    """Round-robin: pick enabled proxy with oldest last_used_at (NULLs first).
+    Updates last_used_at to now and returns the proxy dict."""
+    row = db.execute("""
+        SELECT * FROM proxy_pool
+        WHERE enabled=1
+        ORDER BY (last_used_at IS NULL) DESC, last_used_at ASC, id ASC
+        LIMIT 1
+    """).fetchone()
+    if not row:
+        return None
+    p = dict(row)
+    db.execute("UPDATE proxy_pool SET last_used_at=?, total_count=total_count+1 WHERE id=?",
+               (datetime.now().isoformat(), p["id"]))
+    db.commit()
+    return p
+
+
+def proxy_record_success(db: sqlite3.Connection, proxy_id: int, latency_ms: int = 0):
+    """Mark a successful use: reset fail_count, increment success_count."""
+    db.execute("""
+        UPDATE proxy_pool
+        SET fail_count=0,
+            success_count=success_count+1,
+            last_status='ok',
+            last_tested_at=?,
+            latency_ms=?
+        WHERE id=?
+    """, (datetime.now().isoformat(), int(latency_ms or 0), proxy_id))
+    db.commit()
+
+
+def proxy_record_failure(db: sqlite3.Connection, proxy_id: int, status: str = "error"):
+    """Mark a failure: increment fail_count, auto-disable if >= threshold."""
+    row = db.execute("SELECT fail_count FROM proxy_pool WHERE id=?", (proxy_id,)).fetchone()
+    if not row:
+        return
+    new_fc = (row["fail_count"] or 0) + 1
+    enable_flag = 0 if new_fc >= PROXY_FAIL_THRESHOLD else 1
+    db.execute("""
+        UPDATE proxy_pool
+        SET fail_count=?,
+            enabled=?,
+            last_status=?,
+            last_tested_at=?
+        WHERE id=?
+    """, (new_fc, enable_flag, str(status)[:64], datetime.now().isoformat(), proxy_id))
+    db.commit()
+
+
+def proxy_get(db: sqlite3.Connection, proxy_id: int) -> dict | None:
+    """Get single proxy by id."""
+    row = db.execute("SELECT * FROM proxy_pool WHERE id=?", (proxy_id,)).fetchone()
+    return dict(row) if row else None
+
+
+# ── Projects Registry (Phase 1+) ────────────────────────
+DEFAULT_PROJECT_SEEDS = [
+    {
+        "slug": "dashboard",
+        "name": "Dashboard",
+        "kind": "supervisor",
+        "source_ref": "supervisor:dashboard",
+        "description": "Service Manager Panel (FastAPI)",
+        "icon": "layout-dashboard",
+        "tags": ["panel", "fastapi", "internal"],
+        "log_paths": ["/opt/services/logs/dashboard.log"],
+        "urls": ["https://panel.ldctesting.my.id"],
+        "expected_port": 8000,
+        "config_paths": [],
+        "control": "restart",  # do NOT allow stop — would kill itself
+    },
+    {
+        "slug": "komiku-scraper",
+        "name": "Komiku Scraper",
+        "kind": "supervisor",
+        "source_ref": "supervisor:komiku-scraper",
+        "description": "Scrape komik dari komiku.org (full library + update tracker)",
+        "icon": "book-open",
+        "tags": ["scraper", "manga"],
+        "log_paths": ["/opt/services/logs/komiku-scraper.log"],
+        "urls": [],
+        "config_paths": ["/opt/services/komiku-scraper/config.yaml"],
+        "control": "full",
+    },
+    {
+        "slug": "otakudesu-scraper",
+        "name": "Otakudesu Scraper",
+        "kind": "supervisor",
+        "source_ref": "supervisor:otakudesu-scraper",
+        "description": "Scrape ongoing anime dari otakudesu.blog",
+        "icon": "tv",
+        "tags": ["scraper", "anime"],
+        "log_paths": ["/opt/services/logs/otakudesu-scraper.log"],
+        "urls": [],
+        "config_paths": ["/opt/services/otakudesu-scraper/config.yaml"],
+        "control": "full",
+    },
+    {
+        "slug": "fruityblox-scraper",
+        "name": "FruityBlox",
+        "kind": "supervisor",
+        "source_ref": "supervisor:fruityblox-scraper",
+        "description": "Monitor Blox Fruits stock dari GitHub API",
+        "icon": "apple",
+        "tags": ["scraper", "game"],
+        "log_paths": ["/opt/services/logs/fruityblox-scraper.log"],
+        "urls": [],
+        "config_paths": ["/opt/services/fruityblox-scraper/config.yaml"],
+        "control": "full",
+    },
+]
+
+
+def seed_default_projects(db: sqlite3.Connection):
+    """Insert default project rows (idempotent — uses INSERT OR IGNORE on slug).
+
+    Existing rows are NOT modified, so user-edited values are preserved.
+    """
+    for i, p in enumerate(DEFAULT_PROJECT_SEEDS):
+        db.execute("""
+            INSERT OR IGNORE INTO projects (
+                slug, name, kind, source_ref, description, icon,
+                tags, log_paths, urls, expected_port, config_paths,
+                control, sort_order, enabled
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+        """, (
+            p["slug"], p["name"], p["kind"], p["source_ref"],
+            p.get("description", ""), p.get("icon", "box"),
+            json.dumps(p.get("tags", [])),
+            json.dumps(p.get("log_paths", [])),
+            json.dumps(p.get("urls", [])),
+            p.get("expected_port"),
+            json.dumps(p.get("config_paths", [])),
+            p.get("control", "full"),
+            i,
+        ))
+    db.commit()
+
+
+def _row_to_project(row: sqlite3.Row | dict) -> dict:
+    """Convert a project row into a Python dict with parsed JSON fields."""
+    if row is None:
+        return None
+    d = dict(row)
+    for fld in ("tags", "log_paths", "urls", "config_paths"):
+        try:
+            d[fld] = json.loads(d.get(fld) or "[]")
+        except Exception:
+            d[fld] = []
+    d["pinned"] = bool(d.get("pinned"))
+    d["enabled"] = bool(d.get("enabled"))
+    return d
+
+
+def list_projects(db: sqlite3.Connection, only_enabled: bool = True) -> list[dict]:
+    """List all projects sorted by pinned-first, then sort_order, then name."""
+    sql = """
+        SELECT * FROM projects
+        {where}
+        ORDER BY pinned DESC, sort_order ASC, name ASC
+    """.format(where="WHERE enabled = 1" if only_enabled else "")
+    rows = db.execute(sql).fetchall()
+    return [_row_to_project(r) for r in rows]
+
+
+def get_project(db: sqlite3.Connection, slug: str) -> dict | None:
+    row = db.execute("SELECT * FROM projects WHERE slug = ?", (slug,)).fetchone()
+    return _row_to_project(row) if row else None
+
+
+def get_project_by_id(db: sqlite3.Connection, pid: int) -> dict | None:
+    row = db.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
+    return _row_to_project(row) if row else None
+
+
+def upsert_project(db: sqlite3.Connection, data: dict) -> int:
+    """Insert or update a project. Returns id."""
+    existing = db.execute("SELECT id FROM projects WHERE slug = ?", (data["slug"],)).fetchone()
+    fields = {
+        "name": data.get("name", data["slug"]),
+        "kind": data.get("kind", "custom"),
+        "source_ref": data.get("source_ref", ""),
+        "description": data.get("description", ""),
+        "icon": data.get("icon", "box"),
+        "tags": json.dumps(data.get("tags", []) if isinstance(data.get("tags"), list) else []),
+        "log_paths": json.dumps(data.get("log_paths", []) if isinstance(data.get("log_paths"), list) else []),
+        "urls": json.dumps(data.get("urls", []) if isinstance(data.get("urls"), list) else []),
+        "health_endpoint": data.get("health_endpoint", ""),
+        "expected_port": data.get("expected_port"),
+        "config_paths": json.dumps(data.get("config_paths", []) if isinstance(data.get("config_paths"), list) else []),
+        "control": data.get("control", "full"),
+        "custom_start": data.get("custom_start", ""),
+        "custom_stop": data.get("custom_stop", ""),
+        "custom_status": data.get("custom_status", ""),
+        "pinned": 1 if data.get("pinned") else 0,
+        "sort_order": int(data.get("sort_order", 0)),
+        "enabled": 1 if data.get("enabled", True) else 0,
+        "updated_at": datetime.now().isoformat(),
+    }
+    if existing:
+        sets = ", ".join(f"{k}=?" for k in fields)
+        params = list(fields.values()) + [existing["id"]]
+        db.execute(f"UPDATE projects SET {sets} WHERE id = ?", params)
+        db.commit()
+        return existing["id"]
+    cols = ["slug"] + list(fields.keys())
+    placeholders = ", ".join("?" for _ in cols)
+    params = [data["slug"]] + list(fields.values())
+    db.execute(f"INSERT INTO projects ({', '.join(cols)}) VALUES ({placeholders})", params)
+    db.commit()
+    return int(db.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def delete_project(db: sqlite3.Connection, slug: str) -> bool:
+    db.execute("DELETE FROM projects WHERE slug = ?", (slug,))
+    db.commit()
+    return True
+
+
+def log_project_event(db: sqlite3.Connection, project_id: int, kind: str,
+                      message: str, level: str = "info", meta: dict | None = None):
+    db.execute("""
+        INSERT INTO project_events (project_id, level, kind, message, meta)
+        VALUES (?, ?, ?, ?, ?)
+    """, (project_id, level, kind, message, json.dumps(meta or {})))
+    db.commit()
+
+
+def list_project_events(db: sqlite3.Connection, project_id: int | None = None,
+                        limit: int = 100) -> list[dict]:
+    if project_id is None:
+        rows = db.execute("""
+            SELECT e.*, p.slug AS project_slug, p.name AS project_name
+            FROM project_events e
+            LEFT JOIN projects p ON e.project_id = p.id
+            ORDER BY e.id DESC LIMIT ?
+        """, (limit,)).fetchall()
+    else:
+        rows = db.execute("""
+            SELECT e.*, p.slug AS project_slug, p.name AS project_name
+            FROM project_events e
+            LEFT JOIN projects p ON e.project_id = p.id
+            WHERE e.project_id = ?
+            ORDER BY e.id DESC LIMIT ?
+        """, (project_id, limit)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["meta"] = json.loads(d.get("meta") or "{}")
+        except Exception:
+            d["meta"] = {}
+        out.append(d)
+    return out
+
+
+def insert_project_metric(db: sqlite3.Connection, project_id: int,
+                          cpu_pct: float, rss_mb: float, status: str):
+    db.execute("""
+        INSERT INTO project_metrics (project_id, cpu_pct, rss_mb, status)
+        VALUES (?, ?, ?, ?)
+    """, (project_id, float(cpu_pct or 0), float(rss_mb or 0), status))
+
+
+def get_project_metrics(db: sqlite3.Connection, project_id: int,
+                        minutes: int = 60, max_points: int = 60) -> list[dict]:
+    """Get recent metrics for a project. Returns list of dicts ordered ASC by ts."""
+    rows = db.execute("""
+        SELECT ts, cpu_pct, rss_mb, status
+        FROM project_metrics
+        WHERE project_id = ? AND ts >= datetime('now', '-' || ? || ' minutes')
+        ORDER BY ts ASC
+    """, (project_id, minutes)).fetchall()
+    pts = [dict(r) for r in rows]
+    # Downsample if too many points
+    if len(pts) > max_points and max_points > 0:
+        step = len(pts) / max_points
+        pts = [pts[int(i * step)] for i in range(max_points)]
+    return pts
+
+
+def prune_project_metrics(db: sqlite3.Connection, days: int = 7) -> int:
+    """Delete metrics older than N days. Returns rows deleted."""
+    cur = db.execute(
+        "DELETE FROM project_metrics WHERE ts < datetime('now', '-' || ? || ' days')",
+        (days,))
+    db.commit()
+    return cur.rowcount or 0
+
+
+def log_project_action(db: sqlite3.Connection, *, project_slug: str, project_id: int | None,
+                       actor: str, action: str, result: str = "ok",
+                       message: str = "", duration_ms: int = 0,
+                       params: dict | None = None):
+    db.execute("""
+        INSERT INTO project_actions
+            (project_id, project_slug, actor, action, params, result, duration_ms, message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (project_id, project_slug, actor, action, json.dumps(params or {}),
+          result, int(duration_ms or 0), message[:500]))
+    db.commit()
+
+
+def list_project_actions(db: sqlite3.Connection, limit: int = 50,
+                         project_slug: str | None = None) -> list[dict]:
+    if project_slug:
+        rows = db.execute("""
+            SELECT * FROM project_actions WHERE project_slug = ?
+            ORDER BY id DESC LIMIT ?
+        """, (project_slug, limit)).fetchall()
+    else:
+        rows = db.execute("""
+            SELECT * FROM project_actions
+            ORDER BY id DESC LIMIT ?
+        """, (limit,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["params"] = json.loads(d.get("params") or "{}")
+        except Exception:
+            d["params"] = {}
+        out.append(d)
+    return out
+
+
+# ── Error Inbox (Phase 4) ──────────────────────────────
+import hashlib as _hashlib
+import re as _re_inbox
+
+_RE_INBOX_NORMALIZE_TS = _re_inbox.compile(
+    r'\b(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+\-]\d{2}:?\d{2})?'
+    r'|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\b'
+)
+_RE_INBOX_NUMBER = _re_inbox.compile(r'\b\d{4,}\b')
+_RE_INBOX_HEX = _re_inbox.compile(r'\b0x[0-9a-fA-F]+\b')
+_RE_INBOX_PATH = _re_inbox.compile(r'(/[^\s:,;\'"]+){2,}')
+_RE_INBOX_PORT = _re_inbox.compile(r':\d{2,5}\b')
+_RE_INBOX_WS = _re_inbox.compile(r'\s+')
+
+
+def normalize_error(message: str) -> str:
+    """Strip per-occurrence variability so equivalent errors share a signature."""
+    s = message or ""
+    s = _RE_INBOX_NORMALIZE_TS.sub("<TS>", s)
+    s = _RE_INBOX_PATH.sub("<PATH>", s)
+    s = _RE_INBOX_HEX.sub("<HEX>", s)
+    s = _RE_INBOX_NUMBER.sub("<N>", s)
+    s = _RE_INBOX_PORT.sub(":<PORT>", s)
+    s = _RE_INBOX_WS.sub(" ", s).strip().lower()
+    return s[:400]
+
+
+def signature_for(project_slug: str, message: str) -> str:
+    """SHA1 of (project_slug + normalized message). Stable across restarts."""
+    norm = normalize_error(message)
+    h = _hashlib.sha1()
+    h.update(project_slug.encode("utf-8"))
+    h.update(b"|")
+    h.update(norm.encode("utf-8"))
+    return h.hexdigest()
+
+
+def upsert_error_inbox(db: sqlite3.Connection, *, project_id: int | None,
+                       project_slug: str, message: str,
+                       level: str = "error") -> tuple[int, bool]:
+    """Insert or update an inbox entry. Returns (id, is_new)."""
+    sig = signature_for(project_slug or "", message)
+    row = db.execute(
+        "SELECT id, count, status FROM error_inbox WHERE signature = ?",
+        (sig,),
+    ).fetchone()
+    now = datetime.now().isoformat()
+    if row:
+        # Bump counter and last_seen, keep status (user resolution preserved).
+        db.execute("""
+            UPDATE error_inbox
+               SET count = count + 1,
+                   last_seen = ?,
+                   sample_message = CASE WHEN length(sample_message) < length(?)
+                                         THEN ? ELSE sample_message END
+             WHERE id = ?
+        """, (now, message, message[:500], row["id"]))
+        db.commit()
+        return int(row["id"]), False
+    db.execute("""
+        INSERT INTO error_inbox
+            (signature, project_id, project_slug, level, sample_message,
+             count, first_seen, last_seen, status)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'open')
+    """, (sig, project_id, project_slug, level, message[:500], now, now))
+    db.commit()
+    return int(db.execute("SELECT last_insert_rowid()").fetchone()[0]), True
+
+
+def list_error_inbox(db: sqlite3.Connection, *, status: str | None = None,
+                     project_slug: str | None = None,
+                     limit: int = 100) -> list[dict]:
+    sql = """
+        SELECT i.*, p.name AS project_name
+        FROM error_inbox i
+        LEFT JOIN projects p ON i.project_id = p.id
+        WHERE 1=1
+    """
+    params: list = []
+    if status and status != "all":
+        sql += " AND i.status = ?"
+        params.append(status)
+    if project_slug:
+        sql += " AND i.project_slug = ?"
+        params.append(project_slug)
+    sql += " ORDER BY i.last_seen DESC LIMIT ?"
+    params.append(limit)
+    return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+
+def update_error_inbox_status(db: sqlite3.Connection, inbox_id: int,
+                              status: str, actor: str = "") -> bool:
+    if status not in ("open", "acknowledged", "resolved", "ignored"):
+        return False
+    now = datetime.now().isoformat()
+    if status == "acknowledged":
+        db.execute("""
+            UPDATE error_inbox
+               SET status=?, ack_at=?, ack_by=?
+             WHERE id=?
+        """, (status, now, actor, inbox_id))
+    elif status == "resolved":
+        db.execute("""
+            UPDATE error_inbox
+               SET status=?, resolved_at=?
+             WHERE id=?
+        """, (status, now, inbox_id))
+    else:
+        db.execute("UPDATE error_inbox SET status=? WHERE id=?",
+                   (status, inbox_id))
+    db.commit()
+    return True
+
+
+def error_inbox_counts(db: sqlite3.Connection) -> dict:
+    rows = db.execute(
+        "SELECT status, COUNT(*) AS c FROM error_inbox GROUP BY status"
+    ).fetchall()
+    out = {"open": 0, "acknowledged": 0, "resolved": 0, "ignored": 0}
+    for r in rows:
+        out[r["status"]] = int(r["c"])
+    out["total"] = sum(out.values())
+    return out
+
+
+# ── Alert rules + history (Phase 4) ────────────────────────
+def list_alert_rules(db: sqlite3.Connection,
+                     project_id: int | None = None,
+                     only_enabled: bool = False) -> list[dict]:
+    sql = """
+        SELECT r.*, p.slug AS project_slug, p.name AS project_name
+        FROM alert_rules r
+        LEFT JOIN projects p ON r.project_id = p.id
+        WHERE 1=1
+    """
+    params: list = []
+    if project_id is not None:
+        sql += " AND r.project_id = ?"
+        params.append(project_id)
+    if only_enabled:
+        sql += " AND r.enabled = 1"
+    sql += " ORDER BY r.id ASC"
+    rows = db.execute(sql, params).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["condition"] = json.loads(d.get("condition") or "{}")
+        except Exception:
+            d["condition"] = {}
+        d["enabled"] = bool(d.get("enabled"))
+        out.append(d)
+    return out
+
+
+def get_alert_rule(db: sqlite3.Connection, rule_id: int) -> dict | None:
+    row = db.execute("SELECT * FROM alert_rules WHERE id = ?", (rule_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["condition"] = json.loads(d.get("condition") or "{}")
+    except Exception:
+        d["condition"] = {}
+    return d
+
+
+def upsert_alert_rule(db: sqlite3.Connection, data: dict) -> int:
+    rid = data.get("id")
+    name = (data.get("name") or "").strip() or "Unnamed rule"
+    kind = (data.get("kind") or "").strip()
+    project_id = data.get("project_id")
+    cond = data.get("condition") or {}
+    if not isinstance(cond, str):
+        cond = json.dumps(cond)
+    webhook = data.get("webhook_url") or ""
+    enabled = 1 if data.get("enabled", True) else 0
+    if rid:
+        db.execute("""
+            UPDATE alert_rules
+               SET project_id=?, name=?, kind=?, condition=?, webhook_url=?, enabled=?
+             WHERE id=?
+        """, (project_id, name, kind, cond, webhook, enabled, int(rid)))
+        db.commit()
+        return int(rid)
+    db.execute("""
+        INSERT INTO alert_rules (project_id, name, kind, condition, webhook_url, enabled)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (project_id, name, kind, cond, webhook, enabled))
+    db.commit()
+    return int(db.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def delete_alert_rule(db: sqlite3.Connection, rule_id: int) -> bool:
+    db.execute("DELETE FROM alert_rules WHERE id=?", (rule_id,))
+    db.commit()
+    return True
+
+
+def update_alert_rule_fired(db: sqlite3.Connection, rule_id: int,
+                            snapshot: dict | None = None):
+    now = datetime.now().isoformat()
+    db.execute("""
+        UPDATE alert_rules
+           SET last_fired_at=?, fire_count=fire_count+1
+         WHERE id=?
+    """, (now, rule_id))
+    db.execute("""
+        INSERT INTO alert_history (rule_id, snapshot)
+        VALUES (?, ?)
+    """, (rule_id, json.dumps(snapshot or {})))
+    db.commit()
+
+
+def list_alert_history(db: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    rows = db.execute("""
+        SELECT h.*, r.name AS rule_name, r.kind AS rule_kind, r.project_id,
+               p.slug AS project_slug, p.name AS project_name
+        FROM alert_history h
+        LEFT JOIN alert_rules r ON h.rule_id = r.id
+        LEFT JOIN projects p ON r.project_id = p.id
+        ORDER BY h.id DESC LIMIT ?
+    """, (limit,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["snapshot"] = json.loads(d.get("snapshot") or "{}")
+        except Exception:
+            d["snapshot"] = {}
+        out.append(d)
+    return out
+
+
 # Initialize on import
 init_db()
+
+# Seed default projects on first import (idempotent)
+try:
+    _seed_db = get_db()
+    try:
+        seed_default_projects(_seed_db)
+    finally:
+        _seed_db.close()
+except Exception as _seed_err:
+    # Don't break import on seed failure — log to stderr
+    import sys as _sys
+    print(f"[db] seed_default_projects failed: {_seed_err}", file=_sys.stderr)

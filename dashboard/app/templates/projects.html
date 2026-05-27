@@ -1,0 +1,1062 @@
+{% extends "base.html" %}
+{% block title %}Project Saya{% endblock %}
+{% block content %}
+
+<style>
+/* ── Halaman Project (versi sederhana) ─────────────── */
+.simple-section {
+  margin-bottom: 28px;
+}
+.simple-section-head {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.simple-section-head h2 {
+  font-size: 17px; font-weight: 600; letter-spacing: -0.01em;
+  display: inline-flex; align-items: center; gap: 9px;
+}
+.simple-section-head .desc {
+  color: var(--text-muted); font-size: 12px;
+}
+.simple-section-head .count {
+  margin-left: auto;
+  color: var(--text-muted); font-size: 11px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+/* ── Card umum ── */
+.s-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 16px 18px;
+  transition: border-color 160ms, box-shadow 160ms;
+  position: relative;
+}
+.s-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-muted);
+}
+.s-card .s-name {
+  font-size: 15px; font-weight: 600;
+  letter-spacing: -0.01em;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.s-card .s-sub {
+  font-size: 12px; color: var(--text-muted);
+  margin-top: 4px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+/* ── Status pill ── */
+.s-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.s-status .dot {
+  width: 7px; height: 7px; border-radius: 999px;
+  background: currentColor;
+}
+.s-status.ok       { color: #34d399; border-color: rgba(16,185,129,0.35); background: rgba(16,185,129,0.08); }
+.s-status.warn     { color: #fbbf24; border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); }
+.s-status.bad      { color: #f87171; border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.08); }
+.s-status.starting { color: var(--accent); border-color: var(--accent); background: var(--accent-muted); }
+.s-status.idle     { color: var(--text-muted); }
+.s-status.ok .dot, .s-status.starting .dot {
+  animation: s-blink 1.6s infinite;
+}
+@keyframes s-blink { 0%,100%{opacity:1} 50%{opacity:0.45} }
+
+/* ── Tombol aksi ── */
+.s-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 8px;
+  font-size: 12px; font-weight: 500;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer; font-family: inherit;
+  transition: all 140ms;
+  text-decoration: none;
+}
+.s-btn:hover  { border-color: var(--accent); color: var(--accent); background: var(--accent-muted); }
+.s-btn.go     { background: var(--accent); color: #0a0f1a; border-color: var(--accent); font-weight: 600; }
+.s-btn.go:hover { background: var(--accent-hover); box-shadow: var(--accent-glow); }
+.s-btn.danger:hover { color: #f87171; border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.1); }
+.s-btn[disabled] { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+
+/* ── Grid ── */
+.s-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.s-grid-wide {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+}
+
+/* ── App card layout ── */
+.app-row {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px;
+}
+
+/* ── Site card ── */
+.site-domain {
+  font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--text-primary);
+  text-decoration: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  word-break: break-all;
+}
+.site-domain:hover { color: var(--accent); }
+.site-arrow {
+  color: var(--text-muted); margin-right: 4px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+/* ── Folder card ── */
+.f-type {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 4px;
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+.f-type.laravel  { color:#fb7185; border-color:rgba(244,63,94,0.3); background:rgba(244,63,94,0.06); }
+.f-type.nodejs   { color:#86efac; border-color:rgba(34,197,94,0.3); background:rgba(34,197,94,0.06); }
+.f-type.nextjs   { color:#a5b4fc; border-color:rgba(99,102,241,0.3); background:rgba(99,102,241,0.06); }
+.f-type.python   { color:#fcd34d; border-color:rgba(234,179,8,0.3); background:rgba(234,179,8,0.06); }
+.f-type.php      { color:#c4b5fd; border-color:rgba(139,92,246,0.3); background:rgba(139,92,246,0.06); }
+.f-type.html     { color:#67e8f9; border-color:rgba(6,182,212,0.3); background:rgba(6,182,212,0.06); }
+
+.f-path {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 8px; padding: 6px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.f-path code { flex: 1; min-width: 0; word-break: break-all; }
+.f-path .copy-btn {
+  border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer;
+  padding: 2px; border-radius: 4px;
+  display: inline-flex;
+}
+.f-path .copy-btn:hover { color: var(--accent); background: var(--accent-muted); }
+
+/* ── Header strip ── */
+.welcome-strip {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.welcome-strip h1 {
+  font-size: 26px; font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.welcome-strip .summary {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 4px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+/* ── Pengaturan Lanjutan dropdown ── */
+.adv-wrap { position: relative; }
+.adv-menu {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  min-width: 240px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: var(--shadow-elevated, 0 8px 24px rgba(0,0,0,0.35));
+  z-index: 50;
+  display: none;
+}
+.adv-menu.open { display: block; }
+.adv-menu a {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px; border-radius: 6px;
+  color: var(--text-primary); font-size: 13px;
+  text-decoration: none;
+}
+.adv-menu a:hover { background: var(--accent-muted); color: var(--accent); }
+.adv-menu a .desc {
+  color: var(--text-muted); font-size: 11px;
+  margin-left: auto; font-family: 'Geist Mono', monospace;
+}
+
+.empty-line {
+  text-align: center; padding: 28px 16px;
+  border: 1px dashed var(--border-default);
+  border-radius: 10px;
+  color: var(--text-muted); font-size: 13px;
+}
+
+/* ── Modal ─────────────────────────────────────── */
+.modal-mask {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 8vh;
+}
+.modal-mask.hidden { display: none; }
+.modal-panel {
+  width: 95%; max-width: 480px;
+  max-height: 85vh;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+}
+.modal-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; gap: 10px;
+}
+.modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+.modal-foot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex; gap: 8px; align-items: center;
+}
+.modal-foot-note {
+  padding: 8px 18px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.m-field {
+  display: flex; flex-direction: column; gap: 5px;
+  margin-bottom: 14px;
+}
+.m-field label {
+  font-size: 11px; font-weight: 600;
+  color: var(--text-muted);
+}
+.m-field input, .m-field select {
+  width: 100%; padding: 8px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: inherit; font-size: 13px;
+}
+.m-field input:focus, .m-field select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+.m-field .hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.m-radio-group {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 8px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+}
+.m-radio {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer; padding: 4px;
+  font-size: 13px;
+}
+.m-radio input { accent-color: var(--accent); }
+</style>
+
+<!-- ── Welcome strip ─────────────────────────────── -->
+<div class="welcome-strip fade-in">
+  <div>
+    <h1>Project di server</h1>
+    <p class="summary">
+      <span id="sum-apps">{{ apps|length }}</span> aplikasi ·
+      <span id="sum-sites">{{ sites|length }}</span> website ·
+      <span id="sum-folders">{{ folders|length }}</span> folder ·
+      diperbarui <span id="sum-ago">barusan</span>
+    </p>
+  </div>
+
+  <div class="adv-wrap">
+    <button class="s-btn" onclick="toggleAdv(event)" id="adv-trigger">
+      <i data-lucide="settings-2" class="w-3.5 h-3.5"></i>
+      Pengaturan Lanjutan
+      <i data-lucide="chevron-down" class="w-3 h-3"></i>
+    </button>
+    <div class="adv-menu" id="adv-menu" onclick="event.stopPropagation()">
+      <a href="/projects/notifications">
+        <i data-lucide="bell" class="w-4 h-4" style="color:var(--accent)"></i>
+        <span>Pemberitahuan</span>
+        <span class="desc">inbox + alert</span>
+      </a>
+      <a href="/projects/history">
+        <i data-lucide="history" class="w-4 h-4" style="color:var(--accent)"></i>
+        <span>Riwayat</span>
+        <span class="desc">timeline</span>
+      </a>
+      <a href="#" onclick="openCreateModal();return false">
+        <i data-lucide="plus-circle" class="w-4 h-4" style="color:var(--accent)"></i>
+        <span>Tambah project manual</span>
+        <span class="desc">jarang dipakai</span>
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Tile info jadwal — read only -->
+<div id="schedule-tile" class="hidden" style="margin-bottom:24px;padding:10px 14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:10px;font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  <i data-lucide="calendar-clock" class="w-4 h-4" style="color:var(--accent)"></i>
+  <span id="schedule-summary" style="font-family:'Geist Mono',ui-monospace,monospace">memuat jadwal…</span>
+</div>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- 1. APLIKASI                                         -->
+<!-- ══════════════════════════════════════════════════ -->
+<section class="simple-section">
+  <div class="simple-section-head">
+    <h2>
+      <i data-lucide="box" class="w-5 h-5" style="color:var(--accent)"></i>
+      Aplikasi
+    </h2>
+    <span class="desc">Layanan yang punya proses sendiri (jalan terus di background).</span>
+    <span class="count"><span id="apps-count">{{ apps|length }}</span> total</span>
+  </div>
+
+  <div id="apps-grid" class="s-grid">
+    {% if not apps %}
+    <div class="empty-line" style="grid-column:1/-1">
+      Belum ada aplikasi yang terdaftar. Klik <a href="#" onclick="openCreateModal();return false" style="color:var(--accent)">Tambah project manual</a> untuk menambah.
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- 2. WEBSITE                                          -->
+<!-- ══════════════════════════════════════════════════ -->
+<section class="simple-section">
+  <div class="simple-section-head">
+    <h2>
+      <i data-lucide="globe" class="w-5 h-5" style="color:var(--accent)"></i>
+      Website
+    </h2>
+    <span class="desc">Domain yang dilayani Apache.</span>
+    <span class="count"><span id="sites-count">{{ sites|length }}</span> domain</span>
+  </div>
+
+  <div id="sites-grid" class="s-grid-wide">
+    {% if not sites %}
+    <div class="empty-line" style="grid-column:1/-1">
+      Belum ada website yang dilayani.
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- 3. FOLDER /var/www                                  -->
+<!-- ══════════════════════════════════════════════════ -->
+<section class="simple-section">
+  <div class="simple-section-head">
+    <h2>
+      <i data-lucide="folder-open" class="w-5 h-5" style="color:var(--accent)"></i>
+      Folder di <code style="font-size:14px;color:var(--text-muted)">/var/www/</code>
+    </h2>
+    <span class="desc">Semua project yang ada di folder ini, termasuk yang belum dipasang ke domain.</span>
+    <span class="count"><span id="folders-count">{{ folders|length }}</span> folder</span>
+  </div>
+
+  <div id="folders-grid" class="s-grid-wide">
+    {% if not folders %}
+    <div class="empty-line" style="grid-column:1/-1">
+      Folder <code>/var/www/</code> kosong.
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- Modal: Edit Project                                 -->
+<!-- ══════════════════════════════════════════════════ -->
+<div id="edit-modal" class="modal-mask hidden" onclick="if(event.target===this)closeEditModal()">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <i data-lucide="settings" class="w-4 h-4" style="color:var(--accent)"></i>
+      <div style="flex:1">
+        <div style="font-size:14px;font-weight:600">Edit Project</div>
+        <div id="edit-slug-label" class="modal-sub" style="font-size:11px;color:var(--text-muted);font-family:'Geist Mono',monospace">slug</div>
+      </div>
+      <button class="s-btn" onclick="closeEditModal()"><i data-lucide="x" class="w-3 h-3"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="m-field">
+        <label>Nama tampilan</label>
+        <input id="edit-name" type="text">
+      </div>
+      <div class="m-field">
+        <label>Ikon (Lucide)</label>
+        <input id="edit-icon" type="text" placeholder="box, globe, cog, plug, …">
+        <span class="hint">Daftar ikon: lucide.dev/icons. Contoh: box, server, database, globe.</span>
+      </div>
+      <div class="m-field">
+        <label>Tag (pisah dengan koma)</label>
+        <input id="edit-tags" type="text" placeholder="scraper, anime, internal">
+      </div>
+      <div class="m-field">
+        <label>Tombol kontrol yang muncul</label>
+        <div class="m-radio-group">
+          <label class="m-radio">
+            <input type="radio" name="edit-control" value="full">
+            <span><strong>Penuh</strong> — bisa Mulai, Restart, Hentikan</span>
+          </label>
+          <label class="m-radio">
+            <input type="radio" name="edit-control" value="restart">
+            <span><strong>Restart saja</strong> — tidak bisa dihentikan</span>
+          </label>
+          <label class="m-radio">
+            <input type="radio" name="edit-control" value="read">
+            <span><strong>Read-only</strong> — cuma bisa lihat status</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="s-btn danger" onclick="deleteProject()">
+        <i data-lucide="trash-2" class="w-3 h-3"></i> Hapus dari panel
+      </button>
+      <span style="flex:1"></span>
+      <button class="s-btn" onclick="closeEditModal()">Batal</button>
+      <button class="s-btn go" onclick="saveEdit()">
+        <i data-lucide="save" class="w-3 h-3"></i> Simpan
+      </button>
+    </div>
+    <div class="modal-foot-note">
+      Hapus dari panel <strong>tidak menghentikan</strong> service. Hanya menghilangkan dari daftar.
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════ -->
+<!-- Modal: Tambah Project Manual                        -->
+<!-- ══════════════════════════════════════════════════ -->
+<div id="create-modal" class="modal-mask hidden" onclick="if(event.target===this)closeCreateModal()">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <i data-lucide="plus-circle" class="w-4 h-4" style="color:var(--accent)"></i>
+      <div style="flex:1">
+        <div style="font-size:14px;font-weight:600">Tambah Project Manual</div>
+        <div class="modal-sub" style="font-size:11px;color:var(--text-muted)">untuk service yang tidak terdeteksi otomatis</div>
+      </div>
+      <button class="s-btn" onclick="closeCreateModal()"><i data-lucide="x" class="w-3 h-3"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="m-field">
+        <label>Slug (ID unik)</label>
+        <input id="cr-slug" type="text" placeholder="contoh: my-app">
+        <span class="hint">Huruf kecil, angka, dan tanda hubung. Tidak bisa diubah setelah disimpan.</span>
+      </div>
+      <div class="m-field">
+        <label>Nama tampilan</label>
+        <input id="cr-name" type="text" placeholder="My Awesome App">
+      </div>
+      <div class="m-field">
+        <label>Tipe</label>
+        <select id="cr-kind" onchange="onCreateKindChange()">
+          <option value="supervisor">Supervisor program</option>
+          <option value="systemd">Systemd unit</option>
+          <option value="apache_vhost">Apache vhost</option>
+          <option value="port">Listener port</option>
+          <option value="custom">Custom (perintah shell)</option>
+        </select>
+      </div>
+      <div class="m-field">
+        <label>Source ref</label>
+        <input id="cr-source" type="text" placeholder="contoh: supervisor:my-app">
+        <span class="hint" id="cr-source-hint">Format: supervisor:&lt;nama&gt;</span>
+      </div>
+      <div class="m-field">
+        <label>Port (opsional)</label>
+        <input id="cr-port" type="number" placeholder="contoh: 8080">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span style="flex:1"></span>
+      <button class="s-btn" onclick="closeCreateModal()">Batal</button>
+      <button class="s-btn go" onclick="saveCreate()">
+        <i data-lucide="save" class="w-3 h-3"></i> Tambah
+      </button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ───────────────────────────────────────
+const STATE = {
+  apps:    {{ apps|tojson }},
+  sites:   {{ sites|tojson }},
+  folders: {{ folders|tojson }},
+  generatedAt: {{ snapshot.generated_at|tojson }},
+};
+
+// ── Helpers ─────────────────────────────────────
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+const STATE_LABEL = {
+  running:  { label: 'Jalan',           cls: 'ok' },
+  starting: { label: 'Memulai…',        cls: 'starting' },
+  stopped:  { label: 'Mati',            cls: 'warn' },
+  fatal:    { label: 'Error',           cls: 'bad' },
+  unknown:  { label: 'Tidak diketahui', cls: 'idle' },
+};
+
+function fmtAgo(ts) {
+  if (!ts) return '—';
+  const diff = Math.max(0, (Date.now()/1000) - ts);
+  if (diff < 5) return 'barusan';
+  if (diff < 60) return Math.floor(diff) + ' detik lalu';
+  if (diff < 3600) return Math.floor(diff/60) + ' menit lalu';
+  if (diff < 86400) return Math.floor(diff/3600) + ' jam lalu';
+  return Math.floor(diff/86400) + ' hari lalu';
+}
+
+function fmtUptime(sec) {
+  if (!sec || sec < 0) return null;
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d} hari ${h} jam`;
+  if (h) return `${h} jam ${m} menit`;
+  if (m) return `${m} menit`;
+  return `${Math.floor(sec)} detik`;
+}
+
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(
+      () => toast('Path disalin: ' + text, 'success'),
+      () => fallbackCopy(text),
+    );
+  } else {
+    fallbackCopy(text);
+  }
+}
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed'; ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); toast('Path disalin: ' + text, 'success'); }
+  catch (_) { toast('Gagal menyalin', 'error'); }
+  document.body.removeChild(ta);
+}
+
+// ── App card ────────────────────────────────────
+function appCard(p) {
+  const s = p.status || {};
+  const state = s.state || 'unknown';
+  const label = STATE_LABEL[state] || STATE_LABEL.unknown;
+  const uptime = fmtUptime(s.uptime_sec);
+  const acts = p.actions || {};
+
+  const buttons = [];
+  if (acts.can_start && state !== 'running' && state !== 'starting') {
+    buttons.push(`<button class="s-btn go" onclick="doAction('${escapeHtml(p.slug)}','start')">
+      <i data-lucide="play" class="w-3 h-3"></i>Mulai</button>`);
+  }
+  if (acts.can_restart && (state === 'running' || state === 'fatal')) {
+    buttons.push(`<button class="s-btn" onclick="doAction('${escapeHtml(p.slug)}','restart')">
+      <i data-lucide="rotate-cw" class="w-3 h-3"></i>Restart</button>`);
+  }
+  if (acts.can_stop && state === 'running') {
+    buttons.push(`<button class="s-btn danger" onclick="doAction('${escapeHtml(p.slug)}','stop')">
+      <i data-lucide="square" class="w-3 h-3"></i>Hentikan</button>`);
+  }
+  buttons.push(`<a class="s-btn" href="/projects/${escapeHtml(p.slug)}" title="Detail">
+    <i data-lucide="arrow-up-right" class="w-3 h-3"></i>Detail</a>`);
+  buttons.push(`<button class="s-btn" title="Edit"
+      onclick='openEditModal(${JSON.stringify(p).replace(/'/g, "&#39;")})'>
+    <i data-lucide="more-horizontal" class="w-3 h-3"></i></button>`);
+
+  const sub = state === 'running' && uptime
+    ? `Hidup ${uptime}`
+    : state === 'fatal' && s.extra && s.extra.spawnerr
+      ? `Error: ${escapeHtml(String(s.extra.spawnerr).slice(0, 80))}`
+      : state === 'stopped'
+        ? 'Sedang tidak berjalan'
+        : (s.description || '').slice(0, 80) || '—';
+
+  const kindLabel = ({
+    supervisor: 'supervisor',
+    systemd: 'systemd',
+    custom: 'custom',
+    port: 'listener'
+  })[p.kind] || p.kind;
+
+  return `
+    <div class="s-card" data-slug="${escapeHtml(p.slug)}">
+      <div class="app-row">
+        <div style="min-width:0;flex:1">
+          <a href="/projects/${escapeHtml(p.slug)}" class="s-name" style="color:var(--text-primary);text-decoration:none">
+            <i data-lucide="${escapeHtml(p.icon || 'box')}" class="w-4 h-4" style="color:var(--text-muted)"></i>
+            ${escapeHtml(p.name)}
+          </a>
+          <div class="s-sub">${escapeHtml(sub)}</div>
+          <div class="s-sub" style="margin-top:6px;font-size:10px;text-transform:uppercase;letter-spacing:0.06em">
+            ${escapeHtml(kindLabel)}${s.pid ? ' · pid ' + s.pid : ''}
+          </div>
+        </div>
+        <span class="s-status ${label.cls}"><span class="dot"></span>${label.label}</span>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">
+        ${buttons.join('')}
+      </div>
+    </div>`;
+}
+
+// ── Site card ───────────────────────────────────
+function siteCard(p) {
+  const s = p.status || {};
+  const x = s.extra || {};
+  const enabled = !!x.enabled;
+  const sn = x.server_name || p.name;
+  const dr = x.document_root || '';
+  const proxy = (x.proxy_targets && x.proxy_targets[0]) || '';
+
+  const urlHttp = sn ? `http://${sn}` : '';
+  const arrowLine = proxy
+    ? `<span class="site-arrow">→</span> proxy ke <code style="color:var(--text-secondary)">${escapeHtml(proxy)}</code>`
+    : dr
+      ? `<span class="site-arrow">→</span> folder <code style="color:var(--text-secondary)">${escapeHtml(dr)}</code>`
+      : '';
+
+  const statusLabel = enabled
+    ? `<span class="s-status ok"><span class="dot"></span>Aktif</span>`
+    : `<span class="s-status idle"><span class="dot"></span>Nonaktif</span>`;
+
+  return `
+    <div class="s-card" data-slug="${escapeHtml(p.slug)}">
+      <div class="app-row">
+        <div style="min-width:0;flex:1">
+          <a href="${escapeHtml(urlHttp)}" target="_blank" rel="noopener" class="site-domain">
+            ${escapeHtml(sn)}
+            <i data-lucide="external-link" class="w-3.5 h-3.5" style="color:var(--text-muted)"></i>
+          </a>
+          <div class="s-sub" style="margin-top:6px">${arrowLine}</div>
+        </div>
+        ${statusLabel}
+      </div>
+      <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">
+        ${urlHttp ? `<a class="s-btn" href="${escapeHtml(urlHttp)}" target="_blank" rel="noopener">
+          <i data-lucide="external-link" class="w-3 h-3"></i>Buka</a>` : ''}
+        <a class="s-btn" href="/projects/${escapeHtml(p.slug)}">
+          <i data-lucide="settings-2" class="w-3 h-3"></i>Konfigurasi
+        </a>
+        ${enabled
+          ? `<button class="s-btn danger" onclick="doAction('${escapeHtml(p.slug)}','stop')">
+              <i data-lucide="power-off" class="w-3 h-3"></i>Nonaktifkan</button>`
+          : `<button class="s-btn go" onclick="doAction('${escapeHtml(p.slug)}','start')">
+              <i data-lucide="power" class="w-3 h-3"></i>Aktifkan</button>`}
+        <button class="s-btn" title="Edit"
+            onclick='openEditModal(${JSON.stringify(p).replace(/'/g, "&#39;")})'>
+          <i data-lucide="more-horizontal" class="w-3 h-3"></i>
+        </button>
+      </div>
+    </div>`;
+}
+
+// ── Folder card ─────────────────────────────────
+function folderTypeClass(t) {
+  const m = (t || '').toLowerCase();
+  if (m.includes('laravel')) return 'laravel';
+  if (m.includes('next')) return 'nextjs';
+  if (m.includes('node')) return 'nodejs';
+  if (m.includes('python') || m.includes('django')) return 'python';
+  if (m.includes('php')) return 'php';
+  if (m.includes('html')) return 'html';
+  return '';
+}
+
+function folderCard(f) {
+  const tCls = folderTypeClass(f.type);
+  const attached = f.is_attached;
+  const domains = (f.attached_domains || []).map(a => a.domain).filter(Boolean);
+
+  const statusLine = attached
+    ? `<span class="s-status ok"><span class="dot"></span>Sudah dipasang ke ${domains.map(escapeHtml).join(', ')}</span>`
+    : `<span class="s-status warn"><span class="dot"></span>Belum dipasang ke domain</span>`;
+
+  const sizeLine = `${escapeHtml(f.size_human || '—')} · diubah ${escapeHtml(f.modified_human || '—')}`;
+
+  return `
+    <div class="s-card">
+      <div class="app-row">
+        <div style="min-width:0;flex:1">
+          <div class="s-name">
+            <i data-lucide="folder" class="w-4 h-4" style="color:var(--text-muted)"></i>
+            ${escapeHtml(f.name)}
+          </div>
+          <div class="s-sub" style="margin-top:6px">${sizeLine}</div>
+        </div>
+        <span class="f-type ${tCls}">${escapeHtml(f.type || '—')}</span>
+      </div>
+
+      <div style="margin-top:10px">${statusLine}</div>
+
+      <div class="f-path">
+        <i data-lucide="terminal" class="w-3 h-3" style="color:var(--text-muted)"></i>
+        <code>${escapeHtml(f.path)}</code>
+        <button class="copy-btn" title="Salin path" onclick="copyText('${escapeHtml(f.path)}')">
+          <i data-lucide="copy" class="w-3 h-3"></i>
+        </button>
+      </div>
+
+      ${!attached ? `
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+          <button class="s-btn" onclick="installVhostHint('${escapeHtml(f.name)}', '${escapeHtml(f.path)}', '${escapeHtml(f.public_dir_hint || '')}')">
+            <i data-lucide="plus" class="w-3 h-3"></i>Pasang ke domain
+          </button>
+        </div>
+      ` : ''}
+    </div>`;
+}
+
+// ── Render functions ────────────────────────────
+function renderApps() {
+  const grid = document.getElementById('apps-grid');
+  if (!grid) return;
+  if (!STATE.apps || STATE.apps.length === 0) {
+    grid.innerHTML = `<div class="empty-line" style="grid-column:1/-1">
+      Belum ada aplikasi yang terdaftar. Klik
+      <a href="#" onclick="openCreateModal();return false" style="color:var(--accent)">Tambah project manual</a> untuk menambah.
+    </div>`;
+  } else {
+    // Urutkan: yang bermasalah duluan
+    const order = { fatal: 0, stopped: 1, starting: 2, running: 3, unknown: 4 };
+    const sorted = [...STATE.apps].sort((a, b) =>
+      (order[(a.status||{}).state] ?? 9) - (order[(b.status||{}).state] ?? 9));
+    grid.innerHTML = sorted.map(appCard).join('');
+  }
+  document.getElementById('apps-count').textContent = (STATE.apps || []).length;
+  document.getElementById('sum-apps').textContent = (STATE.apps || []).length;
+}
+
+function renderSites() {
+  const grid = document.getElementById('sites-grid');
+  if (!grid) return;
+  if (!STATE.sites || STATE.sites.length === 0) {
+    grid.innerHTML = `<div class="empty-line" style="grid-column:1/-1">
+      Belum ada website yang dilayani.
+    </div>`;
+  } else {
+    grid.innerHTML = STATE.sites.map(siteCard).join('');
+  }
+  document.getElementById('sites-count').textContent = (STATE.sites || []).length;
+  document.getElementById('sum-sites').textContent = (STATE.sites || []).length;
+}
+
+function renderFolders() {
+  const grid = document.getElementById('folders-grid');
+  if (!grid) return;
+  if (!STATE.folders || STATE.folders.length === 0) {
+    grid.innerHTML = `<div class="empty-line" style="grid-column:1/-1">
+      Folder <code>/var/www/</code> kosong.
+    </div>`;
+  } else {
+    // Urutkan: yang belum punya domain di atas, biar gampang diingat
+    const sorted = [...STATE.folders].sort((a, b) => {
+      if (a.is_attached !== b.is_attached) return a.is_attached ? 1 : -1;
+      return a.name.localeCompare(b.name);
+    });
+    grid.innerHTML = sorted.map(folderCard).join('');
+  }
+  document.getElementById('folders-count').textContent = (STATE.folders || []).length;
+  document.getElementById('sum-folders').textContent = (STATE.folders || []).length;
+}
+
+function renderAll() {
+  renderApps();
+  renderSites();
+  renderFolders();
+  document.getElementById('sum-ago').textContent = fmtAgo(STATE.generatedAt);
+  if (window.lucide) lucide.createIcons();
+}
+
+// ── Actions ─────────────────────────────────────
+async function doAction(slug, action) {
+  const verbs = { start: 'Memulai', stop: 'Menghentikan', restart: 'Restart' };
+  const verb = verbs[action] || action;
+  if (action === 'stop' && !confirm(`Hentikan "${slug}"?`)) return;
+  toast(`${verb} ${slug}…`, 'info');
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(slug)}/action`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action})
+    });
+    const j = await r.json();
+    toast(j.message || (j.ok ? 'Berhasil' : 'Gagal'), j.ok ? 'success' : 'error');
+    refreshAll(true);
+  } catch (e) {
+    toast('Gangguan jaringan: ' + e.message, 'error');
+  }
+}
+
+function installVhostHint(name, path, publicHint) {
+  const docroot = publicHint ? `${path}/${publicHint}` : path;
+  const exampleConf = `<VirtualHost *:80>
+    ServerName ${name}.example.com
+    DocumentRoot ${docroot}
+
+    <Directory ${docroot}>
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/${name}_error.log
+    CustomLog \${APACHE_LOG_DIR}/${name}_access.log combined
+</VirtualHost>`;
+  alert(
+    `Untuk memasang folder "${name}" ke domain:\n\n` +
+    `1. Buat file:  /etc/apache2/sites-available/${name}.conf\n` +
+    `2. Isi dengan konfigurasi (sudah disalin ke clipboard).\n` +
+    `3. Aktifkan:  sudo a2ensite ${name}\n` +
+    `4. Reload:    sudo systemctl reload apache2\n\n` +
+    `Atau buka Pengaturan Lanjutan → Registry untuk daftar manual.`
+  );
+  copyText(exampleConf);
+}
+
+// ── Polling ─────────────────────────────────────
+async function refreshAll(force) {
+  try {
+    const [snapR, foldersR] = await Promise.all([
+      fetch('/api/projects/snapshot' + (force ? '?_t=' + Date.now() : '')),
+      fetch('/api/projects/www-folders'),
+    ]);
+    if (snapR.ok) {
+      const j = await snapR.json();
+      STATE.apps  = (j.projects || []).filter(p =>
+        ['supervisor','systemd','custom','port'].includes(p.kind));
+      STATE.sites = (j.projects || []).filter(p => p.kind === 'apache_vhost');
+      STATE.generatedAt = j.generated_at;
+    }
+    if (foldersR.ok) {
+      const j = await foldersR.json();
+      STATE.folders = j.folders || [];
+    }
+    renderAll();
+  } catch (e) { /* abaikan blip jaringan */ }
+}
+
+// ── Pengaturan Lanjutan dropdown ────────────────
+function toggleAdv(e) {
+  e.stopPropagation();
+  document.getElementById('adv-menu').classList.toggle('open');
+}
+document.addEventListener('click', () => {
+  document.getElementById('adv-menu')?.classList.remove('open');
+});
+
+// ── Modal: Edit Project ─────────────────────────
+let EDIT_TARGET = null;
+
+function openEditModal(p) {
+  EDIT_TARGET = p;
+  document.getElementById('edit-slug-label').textContent = p.slug;
+  document.getElementById('edit-name').value = p.name || '';
+  document.getElementById('edit-icon').value = p.icon || 'box';
+  document.getElementById('edit-tags').value = (p.tags || []).join(', ');
+  const ctl = (p.control || 'full');
+  document.querySelectorAll('input[name="edit-control"]').forEach(r => {
+    r.checked = (r.value === ctl);
+  });
+  document.getElementById('edit-modal').classList.remove('hidden');
+  if (window.lucide) lucide.createIcons();
+}
+
+function closeEditModal() {
+  document.getElementById('edit-modal').classList.add('hidden');
+  EDIT_TARGET = null;
+}
+
+async function saveEdit() {
+  if (!EDIT_TARGET) return;
+  const slug = EDIT_TARGET.slug;
+  const payload = {
+    name: document.getElementById('edit-name').value.trim(),
+    icon: document.getElementById('edit-icon').value.trim() || 'box',
+    tags: document.getElementById('edit-tags').value.split(',').map(x=>x.trim()).filter(Boolean),
+    control: document.querySelector('input[name="edit-control"]:checked')?.value || 'full',
+  };
+  if (!payload.name) { toast('Nama tidak boleh kosong', 'error'); return; }
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(slug)}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      toast(j.error || 'Gagal menyimpan', 'error');
+      return;
+    }
+    toast('Tersimpan', 'success');
+    closeEditModal();
+    refreshAll(true);
+  } catch (e) {
+    toast('Gangguan jaringan: ' + e.message, 'error');
+  }
+}
+
+async function deleteProject() {
+  if (!EDIT_TARGET) return;
+  const slug = EDIT_TARGET.slug;
+  if (!confirm(`Hapus "${EDIT_TARGET.name}" dari panel?\n\nService TIDAK akan dihentikan, hanya hilang dari daftar.`)) {
+    return;
+  }
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(slug)}`, {method: 'DELETE'});
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      toast(j.error || 'Gagal menghapus', 'error');
+      return;
+    }
+    toast('Dihapus dari panel', 'success');
+    closeEditModal();
+    refreshAll(true);
+  } catch (e) {
+    toast('Gangguan jaringan: ' + e.message, 'error');
+  }
+}
+
+// ── Modal: Tambah Manual ────────────────────────
+function openCreateModal() {
+  document.getElementById('cr-slug').value = '';
+  document.getElementById('cr-name').value = '';
+  document.getElementById('cr-kind').value = 'supervisor';
+  document.getElementById('cr-source').value = '';
+  document.getElementById('cr-port').value = '';
+  onCreateKindChange();
+  document.getElementById('create-modal').classList.remove('hidden');
+  document.getElementById('adv-menu')?.classList.remove('open');
+  if (window.lucide) lucide.createIcons();
+}
+
+function closeCreateModal() {
+  document.getElementById('create-modal').classList.add('hidden');
+}
+
+function onCreateKindChange() {
+  const k = document.getElementById('cr-kind').value;
+  const hints = {
+    'supervisor':   'Format: supervisor:<nama-program>',
+    'systemd':      'Format: systemd:<nama-unit>.service',
+    'apache_vhost': 'Format: apache_vhost:<file>.conf',
+    'port':         'Format: port:<nomor>',
+    'custom':       'Bebas, contoh: custom:my-thing',
+  };
+  document.getElementById('cr-source-hint').textContent = hints[k] || '';
+}
+
+async function saveCreate() {
+  const slug = document.getElementById('cr-slug').value.trim();
+  const name = document.getElementById('cr-name').value.trim();
+  const kind = document.getElementById('cr-kind').value;
+  const source_ref = document.getElementById('cr-source').value.trim();
+  const port = parseInt(document.getElementById('cr-port').value) || null;
+  if (!slug || !name) { toast('Slug dan nama wajib diisi', 'error'); return; }
+  const payload = {
+    slug, name, kind, source_ref,
+    expected_port: port,
+    icon: 'box',
+    control: 'full',
+    enabled: true,
+    tags: ['manual'],
+  };
+  try {
+    const r = await fetch('/api/projects', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      toast(j.error || 'Gagal menambah', 'error');
+      return;
+    }
+    toast('Project ditambahkan', 'success');
+    closeCreateModal();
+    refreshAll(true);
+  } catch (e) {
+    toast('Gangguan jaringan: ' + e.message, 'error');
+  }
+}
+
+// ── Tile jadwal (read-only info) ────────────────
+async function loadScheduleTile() {
+  try {
+    const r = await fetch('/api/projects/scheduler?include_cron=0');
+    if (!r.ok) return;
+    const j = await r.json();
+    const items = (j.items || []).filter(i => i.category !== 'internal');
+    if (items.length === 0) return;
+    // Ambil ringkasan: scraper count + backup
+    const scrapers = items.filter(i => i.category === 'scraper');
+    const backups  = items.filter(i => i.category === 'backup');
+    const parts = [];
+    if (scrapers.length) {
+      const minutes = scrapers[0].interval_min || scrapers[0].schedule_min || 0;
+      const word = minutes ? `tiap ${minutes} menit` : 'otomatis';
+      parts.push(`Scraper otomatis: ${word} (${scrapers.length} project)`);
+    }
+    if (backups.length) {
+      const b = backups[0];
+      const at = b.cron_human || b.next_run_local || 'harian';
+      parts.push(`Backup: ${at}`);
+    }
+    if (parts.length === 0) return;
+    document.getElementById('schedule-summary').textContent = parts.join(' · ');
+    document.getElementById('schedule-tile').classList.remove('hidden');
+  } catch (e) { /* abaikan */ }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  renderAll();
+  loadScheduleTile();
+  setInterval(() => {
+    if (document.visibilityState === 'visible') refreshAll();
+  }, 7000);
+});
+</script>
+{% endblock %}

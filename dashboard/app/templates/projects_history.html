@@ -1,0 +1,321 @@
+{% extends "base.html" %}
+{% block title %}Riwayat{% endblock %}
+{% block content %}
+
+<style>
+.h-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.welcome-strip {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.welcome-strip h1 {
+  font-size: 24px; font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.welcome-strip .summary {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 4px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+.s-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 8px;
+  font-size: 12px; font-weight: 500;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer; font-family: inherit;
+  transition: all 140ms;
+  text-decoration: none;
+}
+.s-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-muted); }
+
+.filter-bar {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.filter-bar select {
+  padding: 6px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 7px;
+  color: var(--text-primary);
+  font-family: inherit; font-size: 12px;
+  outline: none;
+  min-width: 140px;
+}
+.filter-bar select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+
+/* Timeline */
+.day-group {
+  margin-bottom: 18px;
+}
+.day-label {
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--text-muted);
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 4px;
+}
+.h-row {
+  display: grid;
+  grid-template-columns: 70px 28px 1fr 90px;
+  gap: 12px; align-items: center;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.h-row:hover { background: var(--bg-elevated); border-radius: 6px; }
+.h-row:last-child { border-bottom: none; }
+.h-row .ts {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px; color: var(--text-muted);
+}
+.h-row .icon-wrap {
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.h-row .icon-wrap.action  { color: var(--accent); border-color: var(--accent); background: var(--accent-muted); }
+.h-row .icon-wrap.warn    { color:#fbbf24; border-color:rgba(245,158,11,0.4); background:rgba(245,158,11,0.08); }
+.h-row .icon-wrap.bad     { color:#f87171; border-color:rgba(239,68,68,0.4); background:rgba(239,68,68,0.08); }
+.h-row .icon-wrap.ok      { color:#34d399; border-color:rgba(16,185,129,0.4); background:rgba(16,185,129,0.08); }
+.h-row .title { font-size: 13px; font-weight: 500; }
+.h-row .detail {
+  font-size: 11px; color: var(--text-muted);
+  margin-top: 2px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.h-row .meta {
+  text-align: right; font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'Geist Mono', monospace;
+}
+.h-row .meta .badge {
+  display: inline-block;
+  padding: 1px 6px; border-radius: 999px;
+  font-weight: 600;
+}
+.h-row .meta .badge.ok { color:#34d399; background:rgba(16,185,129,0.1); }
+.h-row .meta .badge.bad { color:#f87171; background:rgba(239,68,68,0.1); }
+
+.empty-line {
+  text-align: center; padding: 36px 16px;
+  color: var(--text-muted); font-size: 13px;
+}
+</style>
+
+<!-- Breadcrumb -->
+<div class="text-xs metric-num mb-3 flex items-center gap-1.5" style="color:var(--text-muted)">
+  <a href="/projects" class="hover:text-[var(--accent)]">Project</a>
+  <i data-lucide="chevron-right" class="w-3 h-3"></i>
+  <span>Riwayat</span>
+</div>
+
+<div class="welcome-strip fade-in">
+  <div>
+    <h1>Riwayat</h1>
+    <p class="summary">
+      <span id="hist-count">0</span> kejadian · <span id="hist-since">7 hari terakhir</span>
+    </p>
+  </div>
+  <div class="flex gap-2 flex-wrap">
+    <button class="s-btn" onclick="downloadCsv()">
+      <i data-lucide="download" class="w-3.5 h-3.5"></i> Unduh CSV
+    </button>
+  </div>
+</div>
+
+<div class="h-card">
+  <div class="filter-bar">
+    <span class="text-xs" style="color:var(--text-muted)">Tampilkan:</span>
+    <select id="f-since" onchange="loadHistory()">
+      <option value="1">Hari ini</option>
+      <option value="7" selected>7 hari terakhir</option>
+      <option value="30">30 hari terakhir</option>
+      <option value="365">Semua</option>
+    </select>
+    <select id="f-project" onchange="loadHistory()">
+      <option value="">Semua project</option>
+      {% for p in all_projects %}
+      <option value="{{ p.slug }}">{{ p.name }}</option>
+      {% endfor %}
+    </select>
+    <span class="text-xs ml-auto" style="color:var(--text-muted)" id="hist-status">memuat…</span>
+  </div>
+
+  <div id="hist-body">
+    <div class="empty-line">memuat riwayat…</div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  // ts dari sqlite biasanya "YYYY-MM-DD HH:MM:SS" UTC
+  return String(ts).slice(11, 19);
+}
+function fmtDate(ts) {
+  if (!ts) return 'Tanpa tanggal';
+  return String(ts).slice(0, 10);
+}
+function dateLabel(ts) {
+  if (!ts) return 'Tanpa tanggal';
+  const today = new Date();
+  const today_s = today.toISOString().slice(0, 10);
+  const yest = new Date(today.getTime() - 86400000).toISOString().slice(0, 10);
+  const d = String(ts).slice(0, 10);
+  if (d === today_s) return 'Hari ini';
+  if (d === yest)    return 'Kemarin';
+  return d;
+}
+
+function iconFor(item) {
+  // Pilih ikon + warna berdasar tipe & level
+  if (item.type === 'action') {
+    const a = (item.title || '').toLowerCase();
+    if (a.includes('memulai'))      return ['play', 'ok'];
+    if (a.includes('menghentikan')) return ['square', 'warn'];
+    if (a.includes('merestart'))    return ['rotate-cw', 'action'];
+    if (a.includes('mendaftarkan'))  return ['user-plus', 'action'];
+    if (a.includes('menghapus'))    return ['trash-2', 'bad'];
+    if (a.includes('menyimpan'))    return ['save', 'action'];
+    return ['zap', 'action'];
+  }
+  // event sistem
+  const lvl = (item.level || '').toLowerCase();
+  if (lvl === 'error' || lvl === 'critical') return ['alert-triangle', 'bad'];
+  if (lvl === 'warn' || lvl === 'warning')   return ['alert-circle', 'warn'];
+  // status transitions
+  const t = (item.title || '').toLowerCase();
+  if (t.includes('jalan'))  return ['arrow-up-circle', 'ok'];
+  if (t.includes('mati'))   return ['arrow-down-circle', 'warn'];
+  if (t.includes('error'))  return ['alert-triangle', 'bad'];
+  return ['circle', 'action'];
+}
+
+function metaCellFor(item) {
+  if (item.type === 'action') {
+    const r = (item.result || '').toLowerCase();
+    const dur = item.duration_ms ? `${item.duration_ms} ms` : '';
+    if (r === 'ok') {
+      return `<span class="badge ok">selesai</span>${dur ? '<br>' + dur : ''}`;
+    }
+    if (r) {
+      return `<span class="badge bad">${escapeHtml(r)}</span>${dur ? '<br>' + dur : ''}`;
+    }
+    return dur;
+  }
+  return `<span style="opacity:0.7">sistem</span>`;
+}
+
+async function loadHistory() {
+  const since = document.getElementById('f-since').value;
+  const slug  = document.getElementById('f-project').value;
+  const body  = document.getElementById('hist-body');
+  const status = document.getElementById('hist-status');
+  status.textContent = 'memuat…';
+
+  const labels = {1:'hari ini', 7:'7 hari terakhir', 30:'30 hari terakhir', 365:'semua'};
+  document.getElementById('hist-since').textContent = labels[since] || since + ' hari';
+
+  try {
+    const params = new URLSearchParams({ since_days: since, limit: 300 });
+    if (slug) params.set('project_slug', slug);
+    const r = await fetch('/api/projects/history?' + params.toString());
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const items = j.items || [];
+
+    document.getElementById('hist-count').textContent = items.length;
+    status.textContent = items.length + ' kejadian';
+
+    if (!items.length) {
+      body.innerHTML = `<div class="empty-line">
+        <i data-lucide="inbox" class="w-5 h-5 mx-auto mb-2" style="color:var(--text-muted)"></i>
+        Belum ada riwayat untuk periode ini.
+      </div>`;
+      if (window.lucide) lucide.createIcons();
+      return;
+    }
+
+    // Group by date
+    const groups = new Map();
+    for (const it of items) {
+      const key = (it.ts || '').slice(0, 10) || 'unknown';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(it);
+    }
+
+    let html = '';
+    for (const [date, rows] of groups) {
+      html += `<div class="day-group">
+        <div class="day-label">${escapeHtml(dateLabel(date + 'T00:00'))} · ${escapeHtml(date)}</div>`;
+      for (const it of rows) {
+        const [icon, cls] = iconFor(it);
+        const meta = metaCellFor(it);
+        const detail = it.detail
+          ? `<div class="detail">${escapeHtml(it.detail).slice(0, 220)}</div>`
+          : '';
+        html += `<div class="h-row">
+          <div class="ts">${escapeHtml(fmtTime(it.ts))}</div>
+          <div class="icon-wrap ${cls}"><i data-lucide="${icon}" class="w-3.5 h-3.5"></i></div>
+          <div style="min-width:0">
+            <div class="title">${escapeHtml(it.title || '')}</div>
+            ${detail}
+          </div>
+          <div class="meta">${meta}</div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    body.innerHTML = html;
+    if (window.lucide) lucide.createIcons();
+  } catch (e) {
+    body.innerHTML = `<div class="empty-line" style="color:#f87171">
+      Gagal memuat: ${escapeHtml(e.message)}
+    </div>`;
+    status.textContent = 'gagal';
+  }
+}
+
+function downloadCsv() {
+  const slug = document.getElementById('f-project').value;
+  const url = '/api/projects/audit?format=csv&limit=1000' + (slug ? '&project_slug=' + encodeURIComponent(slug) : '');
+  window.location.href = url;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadHistory();
+  setInterval(() => {
+    if (document.visibilityState === 'visible') loadHistory();
+  }, 30000);
+});
+</script>
+{% endblock %}
