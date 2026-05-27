@@ -218,6 +218,61 @@
   </div>
 </div>
 
+<!-- ── NSFW Module (nhentai) ─────────────────────── -->
+{% set nh = nh_cfg if nh_cfg is defined else {} %}
+{% set nh_on = nh.get('nh_enabled', '0') == '1' %}
+{% set nh_proxy_req = nh.get('nh_proxy_required', '1') == '1' %}
+{% set nh_img_proxy = nh.get('nh_image_proxy', '1') == '1' %}
+<div class="grid grid-cols-1 max-w-4xl mt-4">
+  <div class="card p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        <i data-lucide="shield-alert" class="w-4 h-4" style="color:var(--accent)"></i>
+        <h3 class="text-sm font-semibold tracking-tight">NSFW Module (nhentai)</h3>
+        {% if nh_on %}
+        <span class="badge badge-success">enabled</span>
+        {% else %}
+        <span class="badge badge-muted">disabled</span>
+        {% endif %}
+      </div>
+      <a href="/h/proxies" class="btn btn-ghost btn-sm" style="font-size:11px">
+        <i data-lucide="plug-zap" class="w-3.5 h-3.5"></i> Proxy Pool
+      </a>
+    </div>
+    <p class="text-xs mb-4" style="color:var(--text-secondary)">
+      Hidden by default. Saat aktif, fitur browse <code>/h/*</code> jadi accessible. Semua request keluar via rotating proxy pool (limit 20). Off = semua route NSFW return 404.
+    </p>
+    <form id="nh-form" class="space-y-3">
+      <label class="flex items-center gap-3 p-3 rounded-lg" style="background:var(--bg-elevated);border:1px solid var(--border)">
+        <input type="checkbox" name="nh_enabled" {% if nh_on %}checked{% endif %} class="w-4 h-4 rounded" style="accent-color:var(--accent)">
+        <div class="flex-1">
+          <div class="text-xs font-medium">Enable nhentai module</div>
+          <div class="text-[11px]" style="color:var(--text-muted)">Aktifkan menu sidebar & route /h/*. Default off.</div>
+        </div>
+      </label>
+      <label class="flex items-center gap-3 p-3 rounded-lg" style="background:var(--bg-elevated);border:1px solid var(--border)">
+        <input type="checkbox" name="nh_proxy_required" {% if nh_proxy_req %}checked{% endif %} class="w-4 h-4 rounded" style="accent-color:var(--accent)">
+        <div class="flex-1">
+          <div class="text-xs font-medium">Require proxy</div>
+          <div class="text-[11px]" style="color:var(--text-muted)">Block request kalau pool kosong. Recommended.</div>
+        </div>
+      </label>
+      <label class="flex items-center gap-3 p-3 rounded-lg" style="background:var(--bg-elevated);border:1px solid var(--border)">
+        <input type="checkbox" name="nh_image_proxy" {% if nh_img_proxy %}checked{% endif %} class="w-4 h-4 rounded" style="accent-color:var(--accent)">
+        <div class="flex-1">
+          <div class="text-xs font-medium">Stream images via server proxy</div>
+          <div class="text-[11px]" style="color:var(--text-muted)">Off cuma kalau i.nhentai.net tidak diblok dari sisi user.</div>
+        </div>
+      </label>
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" onclick="saveNhConfig()" class="btn btn-primary btn-sm">
+          <i data-lucide="save" class="w-3.5 h-3.5"></i> Save
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script>
 function onSplitModeChange(){
   const mode = document.getElementById('tg_split_mode').value;
@@ -319,6 +374,23 @@ async function refreshHistory(){
     wrap.innerHTML = head + body + '</tbody></table>';
   } catch (e) {
     console.error('refreshHistory:', e);
+  }
+}
+
+async function saveNhConfig() {
+  const form = document.getElementById('nh-form');
+  const fd = new FormData(form);
+  try {
+    const r = await fetch('/settings/nh', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (d.ok) {
+      window.toast && window.toast(d.msg || 'NSFW config saved', 'success');
+      setTimeout(() => location.reload(), 600);
+    } else {
+      window.toast && window.toast(d.error || 'Gagal save', 'error');
+    }
+  } catch (e) {
+    window.toast && window.toast('Error: ' + e.message, 'error');
   }
 }
 </script>

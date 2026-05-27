@@ -1,0 +1,509 @@
+{% extends "base.html" %}
+{% block title %}NH · Browse{% endblock %}
+{% block content %}
+<div class="max-w-7xl" x-data="nhSearch()">
+
+<!-- Header -->
+<div class="mb-6 fade-in flex items-start justify-between gap-4 flex-wrap">
+  <div>
+    <div class="flex items-center gap-2 mb-2">
+      <i data-lucide="book-marked" class="w-4 h-4" style="color:var(--accent)"></i>
+      <span class="text-xs font-mono uppercase tracking-wider" style="color:var(--accent)">NH · 18+</span>
+    </div>
+    <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">Browse Galleries</h1>
+    <p class="text-sm mt-1" style="color:var(--text-secondary)">Search & browse — semua request via rotating proxy.</p>
+  </div>
+  <div class="flex items-center gap-2 flex-wrap">
+    <a href="/h/random" class="btn btn-secondary" title="Open a random gallery">
+      <i data-lucide="dices" class="w-4 h-4"></i> Random
+    </a>
+    <a href="/h/proxies" class="btn btn-secondary" title="Manage proxies">
+      <i data-lucide="plug-zap" class="w-4 h-4"></i>
+      Proxies
+      <span class="badge {% if proxy_active > 0 %}badge-success{% else %}badge-muted{% endif %}" style="margin-left:6px">
+        {{ proxy_active }}/{{ proxy_total }}
+      </span>
+    </a>
+  </div>
+</div>
+
+<!-- Search bar -->
+<form method="GET" action="/h/search" class="card p-3 mb-2 flex flex-wrap gap-2" id="search-form" @submit="onSubmit">
+  <div class="relative flex-1 min-w-[240px]">
+    <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2" style="color:var(--text-muted)"></i>
+    <input type="text" name="q" id="q-input" value="{{ q }}"
+           placeholder="query, e.g. language:english tag:vanilla -tag:guro pages:>20"
+           class="input pl-9 pr-10" autofocus x-ref="qInput">
+    <button type="button" @click="cheatOpen=true"
+            class="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded flex items-center justify-center"
+            style="color:var(--text-muted);background:var(--bg-elevated)" title="Search syntax help">
+      <i data-lucide="help-circle" class="w-4 h-4"></i>
+    </button>
+  </div>
+  <select name="sort" class="input" style="width:auto;min-width:160px">
+    <option value="popular"        {% if sort=='popular' %}selected{% endif %}>Popular (all-time)</option>
+    <option value="popular-week"   {% if sort=='popular-week' %}selected{% endif %}>Popular (week)</option>
+    <option value="popular-today"  {% if sort=='popular-today' %}selected{% endif %}>Popular (today)</option>
+    <option value="popular-month"  {% if sort=='popular-month' %}selected{% endif %}>Popular (month)</option>
+    <option value="date"           {% if sort=='date' %}selected{% endif %}>Newest</option>
+  </select>
+  <button type="button" class="btn btn-secondary" @click="advOpen=!advOpen"
+          :style="advOpen ? 'border-color:var(--accent);color:var(--accent)' : ''">
+    <i data-lucide="sliders" class="w-4 h-4"></i>
+    Advanced
+    <i :data-lucide="advOpen ? 'chevron-up' : 'chevron-down'" class="w-3 h-3"></i>
+  </button>
+  <button type="submit" class="btn btn-primary">
+    <i data-lucide="search" class="w-4 h-4"></i> Search
+  </button>
+</form>
+
+<!-- Quick filter chips -->
+<div class="flex items-center gap-1 mb-2 flex-wrap text-xs">
+  <span class="font-mono uppercase mr-1" style="color:var(--text-muted)">Quick:</span>
+  <template x-for="chip in quickChips" :key="chip.value">
+    <button type="button" @click="toggleChip(chip.value)"
+            class="px-2.5 py-1 rounded font-mono transition-all"
+            :style="hasChip(chip.value)
+              ? 'background:var(--accent);color:#0a0f1a;border:1px solid var(--accent)'
+              : 'background:var(--bg-elevated);color:var(--text-secondary);border:1px solid var(--border)'"
+            x-text="chip.label">
+    </button>
+  </template>
+</div>
+
+<!-- Recent searches -->
+<div class="flex items-center gap-1 mb-3 flex-wrap text-xs" x-show="history.length > 0" x-cloak>
+  <span class="font-mono uppercase mr-1" style="color:var(--text-muted)">Recent:</span>
+  <template x-for="(h, i) in history" :key="i">
+    <span class="inline-flex items-center gap-1 px-2 py-1 rounded font-mono"
+          style="background:var(--bg-elevated);color:var(--text-secondary);border:1px solid var(--border)">
+      <a :href="'/h/search?q=' + encodeURIComponent(h) + '&sort={{ sort }}'" x-text="h.length > 35 ? h.slice(0, 35)+'…' : h"
+         style="color:inherit"></a>
+      <button type="button" @click="removeHistory(i)" class="hover:text-red-400" style="color:var(--text-muted)">
+        <i data-lucide="x" class="w-3 h-3"></i>
+      </button>
+    </span>
+  </template>
+  <button type="button" @click="clearHistory()"
+          class="px-2 py-1 rounded font-mono hover:text-red-400"
+          style="color:var(--text-muted)">
+    Clear all
+  </button>
+</div>
+
+<!-- Advanced panel -->
+<div x-show="advOpen" x-cloak x-collapse class="card p-4 mb-6"
+     style="border-color:var(--accent);background:rgba(0,229,255,0.03)">
+  <p class="text-xs font-mono uppercase mb-3" style="color:var(--accent)">
+    <i data-lucide="sliders" class="w-3.5 h-3.5 inline"></i>
+    Advanced Search Builder
+  </p>
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Include tags</label>
+      <input class="input text-xs" x-model="adv.includeTags" placeholder="vanilla, romance">
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Exclude tags</label>
+      <input class="input text-xs" x-model="adv.excludeTags" placeholder="yaoi, guro, loli">
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Artist</label>
+      <input class="input text-xs" x-model="adv.artist" placeholder="artist name">
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Parody</label>
+      <input class="input text-xs" x-model="adv.parody" placeholder="fate, naruto">
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Character</label>
+      <input class="input text-xs" x-model="adv.character" placeholder="character name">
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Group</label>
+      <input class="input text-xs" x-model="adv.group" placeholder="group name">
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Language</label>
+      <select class="input text-xs" x-model="adv.language">
+        <option value="">— any —</option>
+        <option value="english">English</option>
+        <option value="japanese">Japanese</option>
+        <option value="chinese">Chinese</option>
+        <option value="translated">Translated</option>
+      </select>
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Category</label>
+      <select class="input text-xs" x-model="adv.category">
+        <option value="">— any —</option>
+        <option value="doujinshi">Doujinshi</option>
+        <option value="manga">Manga</option>
+        <option value="artist-cg">Artist CG</option>
+        <option value="game-cg">Game CG</option>
+        <option value="western">Western</option>
+        <option value="image-set">Image Set</option>
+        <option value="non-h">Non-H</option>
+      </select>
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Pages range</label>
+      <div class="flex gap-1">
+        <input class="input text-xs" type="number" min="1" x-model="adv.pagesMin" placeholder="min">
+        <input class="input text-xs" type="number" min="1" x-model="adv.pagesMax" placeholder="max">
+      </div>
+    </div>
+    <div>
+      <label class="text-[11px] font-mono uppercase mb-1 block" style="color:var(--text-muted)">Uploaded within</label>
+      <select class="input text-xs" x-model="adv.uploadAge">
+        <option value="">— any —</option>
+        <option value="1d">Last day</option>
+        <option value="7d">Last week</option>
+        <option value="1m">Last month</option>
+        <option value="6m">Last 6 months</option>
+        <option value="1y">Last year</option>
+      </select>
+    </div>
+  </div>
+  <div class="flex justify-between items-center gap-2 pt-2" style="border-top:1px solid var(--border)">
+    <p class="text-[11px] font-mono" style="color:var(--text-muted)">
+      Preview: <span x-text="advPreview() || '(empty)'" style="color:var(--text-secondary)"></span>
+    </p>
+    <div class="flex gap-2">
+      <button type="button" class="btn btn-secondary" @click="advReset()">
+        <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Reset
+      </button>
+      <button type="button" class="btn btn-primary" @click="advApply()">
+        <i data-lucide="check" class="w-3.5 h-3.5"></i> Apply
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Cheatsheet modal -->
+<div x-show="cheatOpen" x-cloak
+     class="fixed inset-0 z-50 flex items-center justify-center p-4"
+     style="background:rgba(0,0,0,0.6)" @click.self="cheatOpen=false">
+  <div class="card p-5 w-full max-w-2xl">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-lg font-semibold flex items-center gap-2">
+        <i data-lucide="book-open" class="w-5 h-5"></i> Search Syntax Cheatsheet
+      </h3>
+      <button class="btn btn-secondary" style="padding:4px 8px" @click="cheatOpen=false">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+    <p class="text-xs mb-3" style="color:var(--text-secondary)">
+      Operator nhentai support kombinasi field tertentu. Pakai tanda kutip untuk frase eksak.
+    </p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">tag:vanilla</code>
+        <p style="color:var(--text-muted)">Include tag</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">-tag:yaoi</code>
+        <p style="color:var(--text-muted)">Exclude tag</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">artist:hota</code>
+        <p style="color:var(--text-muted)">By artist</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">parody:fate</code>
+        <p style="color:var(--text-muted)">By parody</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">character:saber</code>
+        <p style="color:var(--text-muted)">By character</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">group:foo</code>
+        <p style="color:var(--text-muted)">By scanlation group</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">language:english</code>
+        <p style="color:var(--text-muted)">Language filter</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">category:doujinshi</code>
+        <p style="color:var(--text-muted)">Content category</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">pages:>20</code>
+        <p style="color:var(--text-muted)">Page count comparator (>, <, >=, <=)</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">uploaded:&lt;7d</code>
+        <p style="color:var(--text-muted)">Upload age (1d/7d/1m/6m/1y)</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">"exact phrase"</code>
+        <p style="color:var(--text-muted)">Exact match</p>
+      </div>
+      <div class="p-2 rounded font-mono" style="background:var(--bg-elevated)">
+        <code style="color:var(--accent)">a OR b</code>
+        <p style="color:var(--text-muted)">Boolean OR (kombinasi)</p>
+      </div>
+    </div>
+    <p class="text-[11px] mt-3" style="color:var(--text-muted)">
+      Example: <code style="color:var(--accent)">language:english tag:vanilla -tag:rape pages:>20 uploaded:&lt;7d</code>
+    </p>
+  </div>
+</div>
+
+{% if error %}
+<div class="card p-4 mb-6" style="border-color:#f59e0b;background:rgba(245,158,11,0.08)">
+  <div class="flex items-start gap-3">
+    <i data-lucide="alert-triangle" class="w-5 h-5 flex-shrink-0 mt-0.5" style="color:#f59e0b"></i>
+    <div>
+      <p class="text-sm font-medium">{{ error }}</p>
+      {% if proxy_total == 0 %}
+      <p class="text-xs mt-2" style="color:var(--text-secondary)">
+        Pool kosong. <a href="/h/proxies" style="color:var(--accent)">Tambah proxy</a> dulu.
+      </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% set results = data.result if data else [] %}
+
+{% if results %}
+<!-- Result info bar -->
+<div class="flex items-center justify-between mb-3 text-xs flex-wrap gap-2" style="color:var(--text-secondary)">
+  <span>
+    Page <strong style="color:var(--text-primary)">{{ current_page }}</strong>{% if num_pages %} / <strong style="color:var(--text-primary)">{{ "{:,}".format(num_pages) }}</strong>{% endif %}
+    · Sort: <strong style="color:var(--accent)">{{ sort }}</strong>
+    {% if num_pages and num_pages > 1 %}
+    · ~<strong style="color:var(--text-primary)">{{ "{:,}".format(num_pages * 25) }}</strong> total
+    {% endif %}
+  </span>
+  <span class="font-mono">{{ results|length }} on this page</span>
+</div>
+
+<!-- Grid -->
+<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+  {% for g in results %}
+  {% set cover = g.images.cover if g.images and g.images.cover else None %}
+  {% set cover_ext = {'j':'jpg','p':'png','g':'gif','w':'webp'}.get(cover.t if cover else 'j', 'jpg') %}
+  {% set cover_url = 'https://t.nhentai.net/galleries/' ~ g.media_id ~ '/cover.' ~ cover_ext %}
+  <a href="/h/g/{{ g.id }}" class="card p-2 hover:border-[var(--accent)] transition-all group">
+    <div class="relative aspect-[2/3] mb-2 overflow-hidden rounded-md" style="background:var(--bg-elevated)">
+      <img src="/h/img?u={{ cover_url|urlencode }}"
+           alt="" loading="lazy"
+           class="w-full h-full object-cover group-hover:scale-105 transition-transform"
+           onerror="this.style.opacity='0.2';this.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22></svg>'">
+      <div class="absolute top-1 right-1 flex flex-col gap-1">
+        {% if g.num_pages %}
+        <span class="badge badge-muted text-[10px]" style="background:rgba(0,0,0,0.7);color:#fff">
+          <i data-lucide="layers" class="w-3 h-3"></i> {{ g.num_pages }}
+        </span>
+        {% endif %}
+      </div>
+      {% set lang_tags = (g.tags or [])|selectattr('type','equalto','language')|list %}
+      {% if lang_tags %}
+      <div class="absolute bottom-1 left-1">
+        <span class="badge badge-muted text-[10px]" style="background:rgba(0,0,0,0.7);color:#fff">{{ lang_tags[0].name }}</span>
+      </div>
+      {% endif %}
+    </div>
+    <p class="text-xs font-medium line-clamp-2 group-hover:text-[var(--accent)] transition-colors" style="min-height:2.4em">
+      {{ g.title.pretty if g.title and g.title.pretty else (g.title.english if g.title else '') }}
+    </p>
+    <p class="text-[10px] mt-1 font-mono" style="color:var(--text-muted)">#{{ g.id }}</p>
+  </a>
+  {% endfor %}
+</div>
+
+<!-- Numbered Pagination -->
+{% if num_pages and num_pages > 1 %}
+{% macro page_url(p) -%}
+/h/search?q={{ q|urlencode }}&page={{ p }}&sort={{ sort }}
+{%- endmacro %}
+<nav class="flex items-center justify-center gap-1 mt-6 flex-wrap" aria-label="Pagination">
+  <!-- First -->
+  {% if current_page > 1 %}
+  <a href="{{ page_url(1) }}" class="btn btn-secondary" style="padding:6px 10px" title="First page">
+    <i data-lucide="chevrons-left" class="w-4 h-4"></i>
+  </a>
+  <a href="{{ page_url(current_page-1) }}" class="btn btn-secondary" style="padding:6px 10px" title="Previous page">
+    <i data-lucide="chevron-left" class="w-4 h-4"></i>
+  </a>
+  {% else %}
+  <button class="btn btn-secondary" style="padding:6px 10px;opacity:0.4;cursor:not-allowed" disabled>
+    <i data-lucide="chevrons-left" class="w-4 h-4"></i>
+  </button>
+  <button class="btn btn-secondary" style="padding:6px 10px;opacity:0.4;cursor:not-allowed" disabled>
+    <i data-lucide="chevron-left" class="w-4 h-4"></i>
+  </button>
+  {% endif %}
+
+  <!-- Numbered pages -->
+  {% for p in pages_window %}
+    {% if p is none %}
+      <span class="px-2 font-mono" style="color:var(--text-muted)">…</span>
+    {% elif p == current_page %}
+      <button class="btn" style="padding:6px 12px;background:var(--accent);color:#0a0f1a;border:1px solid var(--accent);font-weight:600" disabled>{{ p }}</button>
+    {% else %}
+      <a href="{{ page_url(p) }}" class="btn btn-secondary" style="padding:6px 12px">{{ p }}</a>
+    {% endif %}
+  {% endfor %}
+
+  <!-- Next / Last -->
+  {% if current_page < num_pages %}
+  <a href="{{ page_url(current_page+1) }}" class="btn btn-secondary" style="padding:6px 10px" title="Next page">
+    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+  </a>
+  <a href="{{ page_url(num_pages) }}" class="btn btn-secondary" style="padding:6px 10px" title="Last page">
+    <i data-lucide="chevrons-right" class="w-4 h-4"></i>
+  </a>
+  {% else %}
+  <button class="btn btn-secondary" style="padding:6px 10px;opacity:0.4;cursor:not-allowed" disabled>
+    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+  </button>
+  <button class="btn btn-secondary" style="padding:6px 10px;opacity:0.4;cursor:not-allowed" disabled>
+    <i data-lucide="chevrons-right" class="w-4 h-4"></i>
+  </button>
+  {% endif %}
+</nav>
+
+<!-- Page jump -->
+<div class="flex items-center justify-center gap-2 mt-3">
+  <form method="GET" action="/h/search" class="flex items-center gap-1">
+    <input type="hidden" name="q" value="{{ q }}">
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <span class="text-xs font-mono" style="color:var(--text-muted)">Jump to:</span>
+    <input type="number" name="page" min="1" max="{{ num_pages }}" value="{{ current_page }}"
+           class="input" style="width:90px;padding:4px 8px;font-size:12px">
+    <button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:12px">
+      Go <i data-lucide="arrow-right" class="w-3 h-3"></i>
+    </button>
+  </form>
+</div>
+{% endif %}
+
+{% elif not error %}
+<div class="card p-12 text-center" style="border-style:dashed">
+  <i data-lucide="search-x" class="w-12 h-12 mx-auto mb-3" style="color:var(--text-muted)"></i>
+  <p class="text-sm" style="color:var(--text-secondary)">
+    {% if q %}Tidak ada hasil untuk "<strong style="color:var(--text-primary)">{{ q }}</strong>"{% else %}Belum ada data.{% endif %}
+  </p>
+</div>
+{% endif %}
+
+</div>
+
+<script>
+function nhSearch() {
+  return {
+    advOpen: false,
+    cheatOpen: false,
+    history: [],
+    quickChips: [
+      { value: 'language:english',  label: 'English' },
+      { value: 'language:japanese', label: 'Japanese' },
+      { value: 'language:chinese',  label: 'Chinese' },
+      { value: 'language:translated', label: 'Translated' },
+      { value: 'pages:>20',         label: 'Pages >20' },
+      { value: 'pages:>50',         label: 'Pages >50' },
+      { value: 'uploaded:<1d',      label: 'Last day' },
+      { value: 'uploaded:<7d',      label: 'Last week' },
+    ],
+    adv: {
+      includeTags: '', excludeTags: '',
+      artist: '', parody: '', character: '', group: '',
+      language: '', category: '',
+      pagesMin: '', pagesMax: '',
+      uploadAge: '',
+    },
+
+    init() {
+      this.loadHistory();
+    },
+
+    // ── Quick chips
+    hasChip(chip) {
+      const q = (this.$refs.qInput?.value || '');
+      return q.includes(chip);
+    },
+    toggleChip(chip) {
+      const inp = this.$refs.qInput;
+      let q = inp.value || '';
+      if (q.includes(chip)) {
+        q = q.replace(chip, '').replace(/\s+/g, ' ').trim();
+      } else {
+        q = (q + ' ' + chip).trim();
+      }
+      inp.value = q;
+      // trigger Alpine reactivity
+      inp.dispatchEvent(new Event('input'));
+    },
+
+    // ── Advanced builder
+    advPreview() {
+      const parts = [];
+      const wrap = (t) => /\s/.test(t) ? `"${t}"` : t;
+      const tags = (s) => s.split(',').map(x => x.trim()).filter(Boolean);
+      for (const t of tags(this.adv.includeTags)) parts.push(`tag:${wrap(t)}`);
+      for (const t of tags(this.adv.excludeTags)) parts.push(`-tag:${wrap(t)}`);
+      if (this.adv.artist)    parts.push(`artist:${wrap(this.adv.artist.trim())}`);
+      if (this.adv.parody)    parts.push(`parody:${wrap(this.adv.parody.trim())}`);
+      if (this.adv.character) parts.push(`character:${wrap(this.adv.character.trim())}`);
+      if (this.adv.group)     parts.push(`group:${wrap(this.adv.group.trim())}`);
+      if (this.adv.language)  parts.push(`language:${this.adv.language}`);
+      if (this.adv.category)  parts.push(`category:${this.adv.category}`);
+      if (this.adv.pagesMin)  parts.push(`pages:>=${this.adv.pagesMin}`);
+      if (this.adv.pagesMax)  parts.push(`pages:<=${this.adv.pagesMax}`);
+      if (this.adv.uploadAge) parts.push(`uploaded:<${this.adv.uploadAge}`);
+      return parts.join(' ');
+    },
+    advApply() {
+      const q = this.advPreview();
+      if (q) this.$refs.qInput.value = q;
+      document.getElementById('search-form').submit();
+    },
+    advReset() {
+      Object.keys(this.adv).forEach(k => this.adv[k] = '');
+    },
+
+    // ── History (localStorage)
+    loadHistory() {
+      try {
+        this.history = JSON.parse(localStorage.getItem('nh_history') || '[]');
+      } catch (e) { this.history = []; }
+    },
+    saveHistory() {
+      try { localStorage.setItem('nh_history', JSON.stringify(this.history)); } catch (e) {}
+    },
+    addHistory(q) {
+      if (!q || !q.trim()) return;
+      q = q.trim();
+      this.history = [q, ...this.history.filter(h => h !== q)].slice(0, 5);
+      this.saveHistory();
+    },
+    removeHistory(i) {
+      this.history.splice(i, 1);
+      this.saveHistory();
+    },
+    clearHistory() {
+      this.history = [];
+      this.saveHistory();
+    },
+    onSubmit() {
+      const q = this.$refs.qInput?.value || '';
+      this.addHistory(q);
+      // allow native form submit
+    },
+  };
+}
+
+// Re-render lucide icons when Alpine inserts new DOM
+document.addEventListener('alpine:initialized', () => {
+  if (window.lucide) lucide.createIcons();
+});
+</script>
+
+{% endblock %}

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}NH · Read #{{ gid }}{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto">
+
+{% if error %}
+<div class="card p-6">
+  <div class="flex items-start gap-3">
+    <i data-lucide="alert-triangle" class="w-5 h-5 flex-shrink-0 mt-0.5" style="color:#f59e0b"></i>
+    <p class="text-sm">{{ error }}</p>
+  </div>
+</div>
+{% elif gallery %}
+{% set g = gallery %}
+{% set total = g.num_pages or (g.images.pages|length if g.images and g.images.pages else 0) %}
+{% set cur = page_num if page_num and page_num >= 1 else 1 %}
+{% if cur > total and total > 0 %}{% set cur = total %}{% endif %}
+
+{% set img_meta = g.images.pages[cur-1] if g.images and g.images.pages and cur >= 1 and cur <= (g.images.pages|length) else None %}
+{% set ext = {'j':'jpg','p':'png','g':'gif','w':'webp'}.get(img_meta.t if img_meta else 'j', 'jpg') %}
+{% set page_src = 'https://i.nhentai.net/galleries/' ~ g.media_id ~ '/' ~ cur ~ '.' ~ ext %}
+
+<!-- Top bar -->
+<div class="card p-3 mb-3 flex items-center justify-between flex-wrap gap-2">
+  <a href="/h/g/{{ g.id }}" class="btn btn-secondary" style="font-size:12px">
+    <i data-lucide="arrow-left" class="w-4 h-4"></i> Detail
+  </a>
+  <p class="text-xs font-mono truncate flex-1 text-center" style="color:var(--text-secondary);min-width:0">
+    #{{ g.id }} · {{ (g.title.pretty if g.title and g.title.pretty else (g.title.english if g.title else ''))|truncate(40) }}
+  </p>
+  <span class="badge badge-muted font-mono">{{ cur }} / {{ total }}</span>
+</div>
+
+<!-- Image -->
+<div class="card p-2 mb-3 flex items-center justify-center" style="min-height:60vh;background:var(--bg-elevated)">
+  <a id="next-img-link" href="{% if cur < total %}/h/r/{{ g.id }}/{{ cur+1 }}{% else %}/h/g/{{ g.id }}{% endif %}" class="block">
+    <img src="/h/img?u={{ page_src|urlencode }}"
+         alt="page {{ cur }}"
+         id="reader-img"
+         class="max-w-full h-auto rounded mx-auto"
+         style="max-height:90vh;cursor:pointer">
+  </a>
+</div>
+
+<!-- Bottom nav -->
+<div class="card p-3 flex items-center justify-between gap-2">
+  {% if cur > 1 %}
+  <a href="/h/r/{{ g.id }}/{{ cur-1 }}" class="btn btn-secondary">
+    <i data-lucide="chevron-left" class="w-4 h-4"></i> Prev
+  </a>
+  {% else %}
+  <span></span>
+  {% endif %}
+  <input type="number" min="1" max="{{ total }}" value="{{ cur }}"
+         class="input" style="width:80px;text-align:center"
+         onchange="if(this.value>={{ 1 }}&&this.value<={{ total }})location.href='/h/r/{{ g.id }}/'+this.value">
+  {% if cur < total %}
+  <a href="/h/r/{{ g.id }}/{{ cur+1 }}" class="btn btn-primary">
+    Next <i data-lucide="chevron-right" class="w-4 h-4"></i>
+  </a>
+  {% else %}
+  <a href="/h/g/{{ g.id }}" class="btn btn-primary">
+    Done <i data-lucide="check" class="w-4 h-4"></i>
+  </a>
+  {% endif %}
+</div>
+
+<!-- Preload next -->
+{% if cur < total %}
+{% set next_meta = g.images.pages[cur] if g.images and g.images.pages and (cur < g.images.pages|length) else None %}
+{% set next_ext = {'j':'jpg','p':'png','g':'gif','w':'webp'}.get(next_meta.t if next_meta else 'j', 'jpg') %}
+{% set next_src = 'https://i.nhentai.net/galleries/' ~ g.media_id ~ '/' ~ (cur+1) ~ '.' ~ next_ext %}
+<link rel="prefetch" href="/h/img?u={{ next_src|urlencode }}">
+{% endif %}
+
+<script>
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowRight') document.getElementById('next-img-link').click();
+  else if (e.key === 'ArrowLeft' && {{ cur }} > 1) location.href = '/h/r/{{ g.id }}/{{ cur-1 }}';
+});
+</script>
+
+{% endif %}
+</div>
+{% endblock %}

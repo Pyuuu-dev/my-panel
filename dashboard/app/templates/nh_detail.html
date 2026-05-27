@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}NH · #{{ gid }}{% endblock %}
+{% block content %}
+<div class="max-w-6xl">
+
+<a href="javascript:history.back()" class="btn btn-secondary mb-4" style="font-size:12px">
+  <i data-lucide="arrow-left" class="w-4 h-4"></i> Back
+</a>
+
+{% if error %}
+<div class="card p-6">
+  <div class="flex items-start gap-3">
+    <i data-lucide="alert-triangle" class="w-5 h-5 flex-shrink-0 mt-0.5" style="color:#f59e0b"></i>
+    <div>
+      <p class="text-sm font-medium">{{ error }}</p>
+      <p class="text-xs mt-2" style="color:var(--text-secondary)">
+        Coba retry, atau cek <a href="/h/proxies" style="color:var(--accent)">proxy pool</a>.
+      </p>
+    </div>
+  </div>
+</div>
+{% elif gallery %}
+{% set g = gallery %}
+{% set cover = g.images.cover if g.images and g.images.cover else None %}
+{% set cover_ext = {'j':'jpg','p':'png','g':'gif','w':'webp'}.get(cover.t if cover else 'j', 'jpg') %}
+{% set cover_url = 'https://t.nhentai.net/galleries/' ~ g.media_id ~ '/cover.' ~ cover_ext %}
+
+<div class="grid md:grid-cols-[260px_1fr] gap-6">
+
+  <!-- Cover -->
+  <div>
+    <div class="card p-2">
+      <div class="aspect-[2/3] rounded-md overflow-hidden" style="background:var(--bg-elevated)">
+        <img src="/h/img?u={{ cover_url|urlencode }}" alt="" class="w-full h-full object-cover">
+      </div>
+    </div>
+    <a href="/h/r/{{ g.id }}/1" class="btn btn-primary w-full mt-3 justify-center">
+      <i data-lucide="book-open" class="w-4 h-4"></i> Read · {{ g.num_pages }} pages
+    </a>
+  </div>
+
+  <!-- Meta -->
+  <div>
+    <p class="text-xs font-mono mb-1" style="color:var(--text-muted)">#{{ g.id }}</p>
+    <h1 class="text-xl md:text-2xl font-semibold tracking-tight mb-1">
+      {{ g.title.pretty if g.title and g.title.pretty else (g.title.english if g.title else '') }}
+    </h1>
+    {% if g.title and g.title.japanese %}
+    <p class="text-sm mb-3" style="color:var(--text-secondary)">{{ g.title.japanese }}</p>
+    {% endif %}
+
+    {% set tag_groups = {} %}
+    {% for t in g.tags or [] %}
+      {% set _ = tag_groups.setdefault(t.type, []).append(t) %}
+    {% endfor %}
+
+    <div class="card p-4 space-y-3 mb-4">
+      {% for label, key in [
+        ('Parody','parody'), ('Character','character'), ('Tag','tag'),
+        ('Artist','artist'), ('Group','group'),
+        ('Language','language'), ('Category','category')
+      ] %}
+        {% if tag_groups.get(key) %}
+        <div>
+          <p class="text-[11px] font-mono uppercase mb-1.5" style="color:var(--text-muted)">{{ label }}</p>
+          <div class="flex flex-wrap gap-1.5">
+            {% for t in tag_groups[key] %}
+            <span class="badge badge-muted">{{ t.name }}{% if t.count %} <span style="opacity:0.5">({{ t.count }})</span>{% endif %}</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+
+      <div class="flex flex-wrap gap-4 pt-3 text-xs" style="color:var(--text-secondary);border-top:1px solid var(--border)">
+        <span><strong>Pages:</strong> {{ g.num_pages }}</span>
+        <span><strong>Favorites:</strong> {{ g.num_favorites or 0 }}</span>
+        {% if g.upload_date %}
+        <span><strong>Uploaded:</strong> {{ g.upload_date|int|format_unix if g.upload_date else '' }}</span>
+        {% endif %}
+        {% if g.scanlator %}<span><strong>Scanlator:</strong> {{ g.scanlator }}</span>{% endif %}
+      </div>
+    </div>
+
+    <!-- Page thumbnails -->
+    {% if g.images and g.images.pages %}
+    <p class="text-[11px] font-mono uppercase mb-2" style="color:var(--text-muted)">Pages</p>
+    <div class="grid grid-cols-5 sm:grid-cols-7 md:grid-cols-9 gap-1.5">
+      {% for img in g.images.pages %}
+      {% set ext = {'j':'jpg','p':'png','g':'gif','w':'webp'}.get(img.t, 'jpg') %}
+      {% set url = 'https://t.nhentai.net/galleries/' ~ g.media_id ~ '/' ~ loop.index ~ 't.' ~ ext %}
+      <a href="/h/r/{{ g.id }}/{{ loop.index }}" class="group relative">
+        <div class="aspect-[2/3] rounded overflow-hidden" style="background:var(--bg-elevated)">
+          <img src="/h/img?u={{ url|urlencode }}" loading="lazy"
+               class="w-full h-full object-cover group-hover:scale-110 transition-transform">
+        </div>
+        <span class="absolute bottom-0.5 right-0.5 text-[9px] font-mono px-1 rounded" style="background:rgba(0,0,0,0.7);color:#fff">{{ loop.index }}</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+</div>
+{% endblock %}

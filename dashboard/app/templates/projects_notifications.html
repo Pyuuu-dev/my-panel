@@ -1,0 +1,555 @@
+{% extends "base.html" %}
+{% block title %}Pemberitahuan{% endblock %}
+{% block content %}
+
+<style>
+.n-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.n-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 12px; align-items: start;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.n-row:last-child { border-bottom: none; }
+.n-row:hover { background: var(--bg-elevated); border-radius: 8px; }
+.n-icon {
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.n-icon.warn { color:#fbbf24; border-color:rgba(245,158,11,0.4); background:rgba(245,158,11,0.08); }
+.n-icon.bad  { color:#f87171; border-color:rgba(239,68,68,0.4);  background:rgba(239,68,68,0.08); }
+.n-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.n-sub {
+  font-size: 12px; color: var(--text-muted);
+  margin-top: 3px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+.n-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.s-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px; border-radius: 7px;
+  font-size: 11px; font-weight: 500;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer; font-family: inherit;
+  transition: all 140ms;
+  text-decoration: none;
+}
+.s-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-muted); }
+.s-btn.go { background: var(--accent); color: #0a0f1a; border-color: var(--accent); font-weight: 600; }
+.s-btn.go:hover { background: var(--accent-hover); }
+.s-btn.danger:hover { color: #f87171; border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.1); }
+
+/* Toggle preset */
+.preset-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.preset-row:last-child { border-bottom: none; }
+.preset-label { font-size: 14px; font-weight: 500; }
+.preset-desc { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+/* Toggle switch */
+.t-switch {
+  position: relative; display: inline-block;
+  width: 40px; height: 22px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.t-switch input { opacity: 0; width: 0; height: 0; }
+.t-switch .slider {
+  position: absolute; inset: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  transition: 200ms;
+}
+.t-switch .slider::before {
+  content: ''; position: absolute;
+  width: 16px; height: 16px;
+  left: 2px; top: 2px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: 200ms;
+}
+.t-switch input:checked + .slider {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+}
+.t-switch input:checked + .slider::before {
+  background: var(--accent);
+  transform: translateX(18px);
+}
+
+.welcome-strip {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.welcome-strip h1 {
+  font-size: 24px; font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.welcome-strip .summary {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 4px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+.section-title {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 16px; font-weight: 600;
+  margin-bottom: 12px;
+}
+.section-title .desc {
+  margin-left: auto;
+  color: var(--text-muted); font-size: 11px;
+  font-family: 'Geist Mono', monospace;
+}
+
+.field {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 12px;
+}
+.field label {
+  font-size: 11px; font-weight: 600;
+  color: var(--text-muted);
+}
+.field input, .field select {
+  width: 100%; padding: 8px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: inherit; font-size: 13px;
+}
+.field input:focus, .field select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+.field .hint {
+  font-size: 11px; color: var(--text-muted);
+}
+
+.empty-line {
+  text-align: center; padding: 28px 16px;
+  border: 1px dashed var(--border-default);
+  border-radius: 10px;
+  color: var(--text-muted); font-size: 13px;
+}
+
+/* ── Tabel ban ── */
+.ban-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ban-table thead th {
+  text-align: left;
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--text-muted);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ban-table tbody td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  vertical-align: middle;
+}
+.ban-table tbody tr:last-child td { border-bottom: none; }
+.ban-table tbody tr:hover { background: var(--bg-elevated); }
+.ban-table .ip { font-weight: 600; color: var(--text-primary); }
+.ban-table .reason {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.ban-table .timer {
+  font-size: 11px; color: #fbbf24;
+  white-space: nowrap;
+}
+.ban-tile-summary {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border-radius: 8px;
+}
+.ban-tile-summary b {
+  color: var(--text-primary);
+  font-family: 'Geist Mono', monospace;
+}
+</style>
+
+<!-- Breadcrumb -->
+<div class="text-xs metric-num mb-3 flex items-center gap-1.5" style="color:var(--text-muted)">
+  <a href="/projects" class="hover:text-[var(--accent)]">Project</a>
+  <i data-lucide="chevron-right" class="w-3 h-3"></i>
+  <span>Pemberitahuan</span>
+</div>
+
+<div class="welcome-strip fade-in">
+  <div>
+    <h1>Pemberitahuan</h1>
+    <p class="summary">
+      <span id="sum-open">{{ counts.open or 0 }}</span> belum ditangani ·
+      <span id="sum-ack">{{ counts.acknowledged or 0 }}</span> sudah ditandai
+    </p>
+  </div>
+</div>
+
+<!-- ── Inbox ─────────────────────────────────────── -->
+<div class="n-card mb-5">
+  <div class="section-title">
+    <i data-lucide="bell" class="w-5 h-5" style="color:var(--accent)"></i>
+    <span>Yang perlu perhatian</span>
+    <span class="desc"><span id="inbox-count">{{ inbox_open|length }}</span> item</span>
+  </div>
+
+  <div id="inbox-list">
+    {% if not inbox_open %}
+    <div class="empty-line">
+      <i data-lucide="check-circle" class="w-5 h-5 mx-auto mb-2" style="color:#34d399"></i>
+      Tidak ada yang perlu perhatian. Semua aman.
+    </div>
+    {% else %}
+    {% for it in inbox_open %}
+    <div class="n-row" data-inbox-id="{{ it.id }}">
+      <div class="n-icon {% if it.level in ['error','critical'] %}bad{% else %}warn{% endif %}">
+        <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
+      </div>
+      <div style="min-width:0">
+        <div class="n-title">{{ it.project_slug or 'Sistem' }}: {{ (it.sample_message or 'kejadian')[:120] }}</div>
+        <div class="n-sub">
+          {{ it.count }}× · pertama {{ (it.first_seen or '')[:16] }} · terakhir {{ (it.last_seen or '')[:16] }}
+        </div>
+      </div>
+      <div class="n-actions">
+        {% if it.project_slug %}
+        <a class="s-btn" href="/projects/{{ it.project_slug }}">
+          <i data-lucide="arrow-up-right" class="w-3 h-3"></i>Buka project
+        </a>
+        {% endif %}
+        <button class="s-btn" onclick="markDone({{ it.id }})">
+          <i data-lucide="check" class="w-3 h-3"></i>Tandai sudah
+        </button>
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── Bot diblokir (fail2ban) ───────────────────── -->
+<div class="n-card mb-5">
+  <div class="section-title">
+    <i data-lucide="shield" class="w-5 h-5" style="color:#34d399"></i>
+    <span>Bot yang sedang diblokir</span>
+    <span class="desc"><span id="ban-count">—</span> IP aktif</span>
+  </div>
+
+  <div id="ban-summary" class="text-xs mb-3" style="color:var(--text-muted);font-family:'Geist Mono',ui-monospace,monospace">
+    memuat data fail2ban…
+  </div>
+
+  <div id="ban-table-wrap">
+    <div class="empty-line">Belum ada data ban yang aktif.</div>
+  </div>
+
+  <div class="text-xs flex items-start gap-1.5 mt-3" style="color:var(--text-muted)">
+    <i data-lucide="info" class="w-3 h-3 flex-shrink-0 mt-0.5"></i>
+    <span>
+      IP otomatis dibebaskan setelah waktu habis. Untuk unban manual, jalankan
+      <code style="color:var(--text-secondary)">sudo fail2ban-client set &lt;jail&gt; unbanip &lt;IP&gt;</code> di terminal.
+    </span>
+  </div>
+</div>
+
+<!-- ── Setting kasih-tahu ────────────────────────── -->
+<div class="n-card mb-5">
+  <div class="section-title">
+    <i data-lucide="settings" class="w-5 h-5" style="color:var(--accent)"></i>
+    <span>Kasih tahu saya kalau…</span>
+  </div>
+
+  <div class="preset-row">
+    <div>
+      <div class="preset-label">Aplikasi mati</div>
+      <div class="preset-desc">Notifikasi muncul saat ada aplikasi yang tidak lagi berjalan.</div>
+    </div>
+    <label class="t-switch">
+      <input type="checkbox" id="p-app_down" {% if presets.app_down %}checked{% endif %}
+             onchange="togglePreset('app_down', this.checked)">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="preset-row">
+    <div>
+      <div class="preset-label">Aplikasi error berulang</div>
+      <div class="preset-desc">Notifikasi muncul kalau aplikasi restart lebih dari 3 kali dalam 5 menit.</div>
+    </div>
+    <label class="t-switch">
+      <input type="checkbox" id="p-repeat_error" {% if presets.repeat_error %}checked{% endif %}
+             onchange="togglePreset('repeat_error', this.checked)">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="preset-row">
+    <div>
+      <div class="preset-label">Website tidak bisa diakses</div>
+      <div class="preset-desc">Cek setiap domain Apache. Notifikasi muncul kalau respon bukan 200 OK.</div>
+    </div>
+    <label class="t-switch">
+      <input type="checkbox" id="p-web_down" {% if presets.web_down %}checked{% endif %}
+             onchange="togglePreset('web_down', this.checked)">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="preset-row">
+    <div>
+      <div class="preset-label">Memori atau disk hampir penuh</div>
+      <div class="preset-desc">Notifikasi saat aplikasi pakai memori berlebih (lebih dari 4 GB).</div>
+    </div>
+    <label class="t-switch">
+      <input type="checkbox" id="p-disk_full" {% if presets.disk_full %}checked{% endif %}
+             onchange="togglePreset('disk_full', this.checked)">
+      <span class="slider"></span>
+    </label>
+  </div>
+</div>
+
+<!-- ── Webhook tujuan ───────────────────────────── -->
+<div class="n-card mb-5">
+  <div class="section-title">
+    <i data-lucide="send" class="w-5 h-5" style="color:var(--accent)"></i>
+    <span>Kirim notifikasi ke</span>
+  </div>
+
+  <div class="field">
+    <label>URL Webhook</label>
+    <input type="text" id="webhook-url" value="{{ global_webhook }}"
+           placeholder="https://api.telegram.org/bot<token>/sendMessage atau Discord/Slack webhook">
+    <span class="hint">
+      Telegram: gunakan format <code>https://api.telegram.org/bot&lt;TOKEN&gt;/sendMessage?chat_id=&lt;ID&gt;</code>.
+      Discord/Slack: copy webhook URL dari channel settings.
+    </span>
+  </div>
+  <div class="flex gap-2 flex-wrap">
+    <button class="s-btn go" onclick="saveWebhook()">
+      <i data-lucide="save" class="w-3 h-3"></i> Simpan
+    </button>
+    <button class="s-btn" onclick="testWebhook()">
+      <i data-lucide="send" class="w-3 h-3"></i> Tes kirim
+    </button>
+    <span id="webhook-status" class="text-xs flex items-center" style="color:var(--text-muted)"></span>
+  </div>
+</div>
+
+<div class="text-xs flex items-center gap-2" style="color:var(--text-muted)">
+  <i data-lucide="info" class="w-3 h-3"></i>
+  Mau aturan custom? Buka
+  <a href="/projects/notifications/advanced" style="color:var(--accent)">aturan lanjutan</a> (untuk pengguna teknis).
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function togglePreset(key, enabled) {
+  const el = document.getElementById('p-' + key);
+  if (el) el.disabled = true;
+  try {
+    const r = await fetch('/api/projects/notifications/preset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, enabled}),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      toast(j.error || 'Gagal menyimpan', 'error');
+      // revert
+      if (el) el.checked = !enabled;
+    } else {
+      toast(enabled ? 'Aktif' : 'Dimatikan', 'success');
+    }
+  } catch (e) {
+    toast('Gangguan jaringan: ' + e.message, 'error');
+    if (el) el.checked = !enabled;
+  } finally {
+    if (el) el.disabled = false;
+  }
+}
+
+async function markDone(id) {
+  try {
+    const r = await fetch(`/api/projects/health/inbox/${id}/acknowledged`, {method: 'POST'});
+    const j = await r.json();
+    if (!r.ok || !j.ok) { toast('Gagal', 'error'); return; }
+    const row = document.querySelector(`[data-inbox-id="${id}"]`);
+    if (row) {
+      row.style.opacity = '0.4';
+      setTimeout(() => row.remove(), 220);
+    }
+    refreshInbox();
+  } catch (e) {
+    toast('Gangguan jaringan: ' + e.message, 'error');
+  }
+}
+
+async function refreshInbox() {
+  try {
+    const r = await fetch('/api/projects/health/inbox?status=open&limit=50');
+    if (!r.ok) return;
+    const j = await r.json();
+    document.getElementById('inbox-count').textContent = (j.items || []).length;
+    document.getElementById('sum-open').textContent = (j.counts || {}).open || 0;
+    document.getElementById('sum-ack').textContent = (j.counts || {}).acknowledged || 0;
+  } catch (e) { /* ignore */ }
+}
+
+async function saveWebhook() {
+  const url = document.getElementById('webhook-url').value.trim();
+  const status = document.getElementById('webhook-status');
+  status.textContent = 'menyimpan…';
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key: 'alert_webhook_url', value: url}),
+    });
+    if (!r.ok) {
+      // fallback: gunakan endpoint test sebagai validasi simpan via setting umum
+      const r2 = await fetch('/api/projects/health/test-webhook', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url, persist: true}),
+      });
+      if (!r2.ok) { status.textContent = 'gagal simpan'; return; }
+    }
+    status.textContent = 'tersimpan';
+    toast('Webhook tersimpan', 'success');
+  } catch (e) {
+    status.textContent = 'error: ' + e.message;
+  }
+}
+
+async function testWebhook() {
+  const url = document.getElementById('webhook-url').value.trim();
+  const status = document.getElementById('webhook-status');
+  status.textContent = 'mengirim tes…';
+  try {
+    const r = await fetch('/api/projects/health/test-webhook', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      status.textContent = 'tes terkirim';
+      toast('Notifikasi tes terkirim', 'success');
+    } else {
+      status.textContent = 'gagal: ' + (j.message || j.error || '');
+      toast(j.error || j.message || 'Gagal kirim', 'error');
+    }
+  } catch (e) {
+    status.textContent = 'error: ' + e.message;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  if (window.lucide) lucide.createIcons();
+  setInterval(() => {
+    if (document.visibilityState === 'visible') refreshInbox();
+  }, 15000);
+  // Fail2ban status
+  loadBannedIps();
+  setInterval(() => {
+    if (document.visibilityState === 'visible') loadBannedIps();
+  }, 30000);
+});
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+async function loadBannedIps() {
+  const wrap = document.getElementById('ban-table-wrap');
+  const summary = document.getElementById('ban-summary');
+  const count = document.getElementById('ban-count');
+  if (!wrap) return;
+  try {
+    const r = await fetch('/api/security/banned-ips');
+    if (!r.ok) {
+      summary.textContent = 'gagal memuat data';
+      wrap.innerHTML = `<div class="empty-line" style="color:#f87171">HTTP ${r.status}</div>`;
+      return;
+    }
+    const j = await r.json();
+    if (j.installed === false) {
+      summary.textContent = 'fail2ban tidak terinstal di server';
+      wrap.innerHTML = `<div class="empty-line">${escapeHtml(j.error || 'fail2ban tidak tersedia')}</div>`;
+      count.textContent = '—';
+      return;
+    }
+    const s = j.summary || {};
+    summary.innerHTML = `
+      <span class="ban-tile-summary">
+        <span><b>${s.total_jails || 0}</b> jail aktif</span>
+        <span><b>${s.total_banned_now || 0}</b> IP sedang diblokir</span>
+        <span><b>${s.total_ban_lifetime || 0}</b> total ban sejak fail2ban hidup</span>
+      </span>`;
+    count.textContent = s.total_banned_now || 0;
+
+    const banned = j.banned || [];
+    if (banned.length === 0) {
+      wrap.innerHTML = `<div class="empty-line">
+        <i data-lucide="check-circle" class="w-5 h-5 mx-auto mb-2" style="color:#34d399"></i>
+        Tidak ada IP yang sedang diblokir. Server aman.
+      </div>`;
+    } else {
+      const rows = banned.map(b => `
+        <tr>
+          <td class="ip">${escapeHtml(b.ip)}</td>
+          <td class="reason">${escapeHtml(b.reason || b.jail || '')}</td>
+          <td class="timer">${escapeHtml(b.unban_at_human || '—')}</td>
+        </tr>
+      `).join('');
+      wrap.innerHTML = `
+        <table class="ban-table">
+          <thead>
+            <tr>
+              <th style="width:38%">IP</th>
+              <th>Alasan diblokir</th>
+              <th style="width:25%">Bebas dalam</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+    if (window.lucide) lucide.createIcons();
+  } catch (e) {
+    summary.textContent = 'error: ' + e.message;
+  }
+}
+</script>
+{% endblock %}

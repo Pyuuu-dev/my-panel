@@ -408,6 +408,21 @@ body {
       <a href="/" onclick="closeSidebar()" class="nav-item {% if page=='dashboard' %}active{% endif %}">
         <i data-lucide="layout-dashboard" class="icon"></i>Dashboard
       </a>
+      <a href="/projects" onclick="closeSidebar()" class="nav-item {% if page=='projects' %}active{% endif %}">
+        <i data-lucide="radio" class="icon"></i>Projects
+        <span class="ml-auto text-[9px] font-mono px-1.5 py-0.5 rounded"
+              style="background:var(--accent-muted);color:var(--accent);letter-spacing:0.05em">NEW</span>
+      </a>
+      <a href="/projects/notifications" onclick="closeSidebar()" class="nav-item"
+         style="padding-left:32px">
+        <i data-lucide="bell" class="icon" style="width:14px;height:14px"></i>
+        <span class="text-[12px]">Pemberitahuan</span>
+      </a>
+      <a href="/projects/history" onclick="closeSidebar()" class="nav-item"
+         style="padding-left:32px">
+        <i data-lucide="history" class="icon" style="width:14px;height:14px"></i>
+        <span class="text-[12px]">Riwayat</span>
+      </a>
       <a href="/bookmarks" onclick="closeSidebar()" class="nav-item {% if page=='bookmarks' %}active{% endif %}">
         <i data-lucide="bookmark" class="icon"></i>Bookmarks
       </a>
@@ -435,6 +450,16 @@ body {
         {{ s.name }}
       </a>
       {% endfor %}
+
+      {% if nh_enabled %}
+      <p class="sidebar-section">Adult</p>
+      <a href="/h/search" onclick="closeSidebar()" class="nav-item {% if page=='nh_search' %}active{% endif %}">
+        <i data-lucide="book-marked" class="icon"></i>NH Browse
+      </a>
+      <a href="/h/proxies" onclick="closeSidebar()" class="nav-item {% if page=='nh_proxies' %}active{% endif %}">
+        <i data-lucide="plug-zap" class="icon"></i>Proxies
+      </a>
+      {% endif %}
 
       <p class="sidebar-section">System</p>
       <a href="/server" onclick="closeSidebar()" class="nav-item {% if page=='server' %}active{% endif %}">
@@ -615,6 +640,9 @@ function updateThemeUI(){
 // ── Command Palette ──
 const CMD_ITEMS = [
   { label: 'Dashboard', icon: 'layout-dashboard', url: '/' },
+  { label: 'Projects', icon: 'radio', url: '/projects' },
+  { label: 'Pemberitahuan', icon: 'bell', url: '/projects/notifications' },
+  { label: 'Riwayat', icon: 'history', url: '/projects/history' },
   { label: 'Bookmarks', icon: 'bookmark', url: '/bookmarks' },
   { label: 'Komik Search', icon: 'book-open', url: '/search' },
   { label: 'Anime', icon: 'tv', url: '/anime' },

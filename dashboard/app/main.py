@@ -23,7 +23,7 @@ from pathlib import Path
 import bcrypt
 import yaml
 from fastapi import FastAPI, Request, Form, Query
-from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, Response, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, Response, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jose import jwt, JWTError
@@ -752,6 +752,14 @@ async def lifespan(app: FastAPI):
         if n: print(f"[Cleanup] {slug}: removed {n} old files")
     # Start background backup scheduler
     backup_task = asyncio.create_task(backup_scheduler_loop())
+    # Start projects collector + event broker (Phase 3)
+    from app.projects.collector import start_collector, stop_collector
+    from app.projects.events import get_broker
+    from app.projects.alerts import start_alerts, stop_alerts
+    collector_task = start_collector()
+    broker = get_broker()
+    broker.start()
+    alert_task, log_task = start_alerts()
     try:
         yield
     finally:
@@ -760,10 +768,45 @@ async def lifespan(app: FastAPI):
             await backup_task
         except asyncio.CancelledError:
             pass
+        stop_collector()
+        try:
+            await collector_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+        stop_alerts()
+        for t in (alert_task, log_task):
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+        broker.stop()
 
 app = FastAPI(title="Service Manager", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 tpl = Jinja2Templates(directory="app/templates")
+
+# ── Auto-inject nh_enabled into every template context ──
+_orig_template_response = tpl.TemplateResponse
+
+def _patched_template_response(*args, **kwargs):
+    """Wrap TemplateResponse so the sidebar can know if NSFW module is on."""
+    ctx = kwargs.get("context")
+    if ctx is None and len(args) >= 3 and isinstance(args[2], dict):
+        ctx = args[2]
+    if ctx is not None and "nh_enabled" not in ctx:
+        try:
+            d = get_db()
+            try:
+                ctx["nh_enabled"] = db.get_setting(d, "nh_enabled", "0") == "1"
+            finally:
+                d.close()
+        except Exception:
+            ctx["nh_enabled"] = False
+    return _orig_template_response(*args, **kwargs)
+
+tpl.TemplateResponse = _patched_template_response
 
 # ── Rate limit middleware ───────────────────────────────
 @app.middleware("http")
@@ -1102,11 +1145,12 @@ async def settings_page(request: Request):
     try:
         bk_cfg = db.get_all_settings(d, prefix="tg_")
         bk_log = db.get_backup_log(d, limit=8)
+        nh_cfg = db.get_all_settings(d, prefix="nh_")
     finally:
         d.close()
     return tpl.TemplateResponse(request, "settings.html", context={
         "user": user, "page": "settings", "services": get_all_services(),
-        "bk_cfg": bk_cfg, "bk_log": bk_log,
+        "bk_cfg": bk_cfg, "bk_log": bk_log, "nh_cfg": nh_cfg,
     })
 
 @app.post("/settings/password")
@@ -1181,6 +1225,27 @@ async def settings_telegram_save(request: Request):
     finally:
         d.close()
     return JSONResponse({"ok": True, "msg": "Telegram backup config saved"})
+
+
+# ── NSFW (nhentai) Settings ─────────────────────────────
+@app.post("/settings/nh")
+async def settings_nh_save(request: Request):
+    """Save NSFW (nhentai) module configuration."""
+    user = get_user(request)
+    if not user: return JSONResponse({"error": "unauthorized"}, 401)
+    form = await request.form()
+    enabled = "nh_enabled" in form
+    proxy_required = "nh_proxy_required" in form
+    image_proxy = "nh_image_proxy" in form
+    d = get_db()
+    try:
+        db.set_setting(d, "nh_enabled", "1" if enabled else "0")
+        db.set_setting(d, "nh_proxy_required", "1" if proxy_required else "0")
+        db.set_setting(d, "nh_image_proxy", "1" if image_proxy else "0")
+        d.commit()
+    finally:
+        d.close()
+    return JSONResponse({"ok": True, "msg": "NSFW module config saved"})
 
 
 @app.post("/api/backup/test-tg")
@@ -2921,3 +2986,1774 @@ async def service_fruityblox(request: Request):
         "stats": [dict(r) for r in stats],
         "logs": logs,
     })
+
+
+# ════════════════════════════════════════════════════════
+# nhentai module (gated by `nh_enabled` setting)
+# ════════════════════════════════════════════════════════
+sys.path.insert(0, "/opt/services/nhentai-service")
+import importlib as _il
+nh_client_mod = _il.import_module("client")
+nh_sources_mod = _il.import_module("proxy_sources")
+from proxy_pool import ProxyPool, ProxyPoolEmpty  # noqa: E402
+
+_nh_pool = ProxyPool()
+
+
+def _nh_enabled(d) -> bool:
+    return db.get_setting(d, "nh_enabled", "0") == "1"
+
+
+def _nh_proxy_required(d) -> bool:
+    return db.get_setting(d, "nh_proxy_required", "1") == "1"
+
+
+def _nh_image_proxy(d) -> bool:
+    return db.get_setting(d, "nh_image_proxy", "1") == "1"
+
+
+def _nh_gate(request: Request):
+    """Return (user, response_or_None). If response is not None, route should return it."""
+    user = get_user(request)
+    if not user:
+        return None, RedirectResponse("/login", 302)
+    d = get_db()
+    try:
+        if not _nh_enabled(d):
+            return None, PlainTextResponse("Not Found", 404)
+    finally:
+        d.close()
+    return user, None
+
+
+def _nh_client() -> "nh_client_mod.NhentaiClient":
+    d = get_db()
+    try:
+        require = _nh_proxy_required(d)
+    finally:
+        d.close()
+    return nh_client_mod.NhentaiClient(pool=_nh_pool, require_proxy=require)
+
+
+# ── In-memory test-all progress ─────────────────────────
+_nh_test_state = {"running": False, "done": 0, "total": 0, "ok": 0, "fail": 0, "started_at": 0.0}
+
+
+# ── Pages ────────────────────────────────────────────────
+@app.get("/h", response_class=HTMLResponse)
+async def nh_root(request: Request):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return gate
+    return RedirectResponse("/h/search", 302)
+
+
+@app.get("/h/search", response_class=HTMLResponse)
+async def nh_search(request: Request, q: str = "", page: int = 1, sort: str = "popular"):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return gate
+    if sort not in ("popular", "popular-week", "popular-today", "popular-month", "date"):
+        sort = "popular"
+    page = max(1, int(page or 1))
+
+    error = None
+    data = {"result": [], "num_pages": 0, "per_page": 25}
+    try:
+        client = _nh_client()
+        if q.strip():
+            data = await client.search(q.strip(), page=page, sort=sort)
+        else:
+            data = await client.latest(page=page)
+    except ProxyPoolEmpty:
+        error = "Proxy pool kosong. Tambah proxy dulu di /h/proxies."
+    except nh_client_mod.NhentaiUnreachable as e:
+        error = f"Semua proxy gagal. ({str(e)[:120]})"
+    except Exception as e:
+        error = f"Error: {type(e).__name__}: {str(e)[:120]}"
+
+    d = get_db()
+    try:
+        proxy_total = db.proxy_count(d)
+        proxy_active = db.proxy_count(d, only_enabled=True)
+    finally:
+        d.close()
+
+    # Build pagination window
+    num_pages = data.get("num_pages", 0) if data else 0
+    pages_window = _nh_page_window(page, num_pages, edge=1, around=2)
+
+    return tpl.TemplateResponse(request, "nh_search.html", context={
+        "user": user,
+        "page": "nh_search",
+        "services": get_all_services(),
+        "nh_enabled": True,
+        "q": q,
+        "current_page": page,
+        "sort": sort,
+        "data": data,
+        "error": error,
+        "proxy_total": proxy_total,
+        "proxy_active": proxy_active,
+        "pages_window": pages_window,
+        "num_pages": num_pages,
+    })
+
+
+@app.get("/h/random")
+async def nh_random(request: Request):
+    """Redirect to a random gallery."""
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return gate
+    try:
+        client = _nh_client()
+        gallery = await client.random()
+        gid = gallery.get("id")
+        if gid:
+            return RedirectResponse(f"/h/g/{gid}", 302)
+    except ProxyPoolEmpty:
+        return RedirectResponse("/h/search?error=proxy_empty", 302)
+    except Exception as e:
+        logging.warning(f"[nh.random] {type(e).__name__}: {e}")
+    return RedirectResponse("/h/search?error=random_failed", 302)
+
+
+def _nh_page_window(current: int, total: int, edge: int = 1, around: int = 2) -> list:
+    """Generate list of page numbers with None for ellipsis.
+
+    Example: _nh_page_window(50, 100) -> [1, None, 48, 49, 50, 51, 52, None, 100]
+    Returns at most edge*2 + around*2 + 3 items (ellipsis & current).
+    If total <= that threshold, returns full list.
+    """
+    if total <= 0:
+        return []
+    threshold = edge * 2 + around * 2 + 3
+    if total <= threshold:
+        return list(range(1, total + 1))
+    pages = set()
+    pages.update(range(1, edge + 1))
+    pages.update(range(total - edge + 1, total + 1))
+    pages.update(range(max(1, current - around), min(total, current + around) + 1))
+    out: list = []
+    prev = 0
+    for p in sorted(pages):
+        if p - prev > 1:
+            out.append(None)
+        out.append(p)
+        prev = p
+    return out
+
+
+@app.get("/h/g/{gid}", response_class=HTMLResponse)
+async def nh_gallery(request: Request, gid: int):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return gate
+
+    error = None
+    gallery = None
+    try:
+        client = _nh_client()
+        gallery = await client.gallery(gid)
+    except ProxyPoolEmpty:
+        error = "Proxy pool kosong. Tambah proxy dulu di /h/proxies."
+    except nh_client_mod.NhentaiNotFound:
+        error = "Gallery tidak ditemukan."
+    except nh_client_mod.NhentaiUnreachable as e:
+        error = f"Semua proxy gagal. ({str(e)[:120]})"
+    except Exception as e:
+        error = f"Error: {type(e).__name__}: {str(e)[:120]}"
+
+    return tpl.TemplateResponse(request, "nh_detail.html", context={
+        "user": user,
+        "page": "nh_search",
+        "services": get_all_services(),
+        "nh_enabled": True,
+        "gallery": gallery,
+        "error": error,
+        "gid": gid,
+    })
+
+
+@app.get("/h/r/{gid}/{page_num}", response_class=HTMLResponse)
+async def nh_reader(request: Request, gid: int, page_num: int):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return gate
+
+    error = None
+    gallery = None
+    try:
+        client = _nh_client()
+        gallery = await client.gallery(gid)
+    except ProxyPoolEmpty:
+        error = "Proxy pool kosong."
+    except nh_client_mod.NhentaiNotFound:
+        error = "Gallery tidak ditemukan."
+    except Exception as e:
+        error = f"Error: {type(e).__name__}: {str(e)[:120]}"
+
+    return tpl.TemplateResponse(request, "nh_reader.html", context={
+        "user": user,
+        "page": "nh_search",
+        "services": get_all_services(),
+        "nh_enabled": True,
+        "gallery": gallery,
+        "page_num": page_num,
+        "error": error,
+        "gid": gid,
+    })
+
+
+@app.get("/h/proxies", response_class=HTMLResponse)
+async def nh_proxies(request: Request):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return gate
+    d = get_db()
+    try:
+        proxies = db.proxy_list(d)
+        total = db.proxy_count(d)
+        active = db.proxy_count(d, only_enabled=True)
+    finally:
+        d.close()
+    return tpl.TemplateResponse(request, "nh_proxies.html", context={
+        "user": user,
+        "page": "nh_proxies",
+        "services": get_all_services(),
+        "nh_enabled": True,
+        "proxies": proxies,
+        "total": total,
+        "active": active,
+        "max_proxies": db.PROXY_POOL_MAX,
+    })
+
+
+# ── Image proxy ──────────────────────────────────────────
+@app.get("/h/img")
+async def nh_img(request: Request, u: str = Query(..., description="image URL")):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        # silently 404 instead of 302 to login (lets <img> tags fail gracefully)
+        return PlainTextResponse("Not Found", 404)
+
+    if not nh_client_mod.NhentaiClient.url_is_allowed(u):
+        return PlainTextResponse("Forbidden host", 403)
+
+    d = get_db()
+    try:
+        if not _nh_image_proxy(d):
+            # User opted to load images directly; just redirect
+            return RedirectResponse(u, 302)
+    finally:
+        d.close()
+
+    client = _nh_client()
+
+    # Determine content type from extension since we stream
+    ext = (u.rsplit(".", 1)[-1] if "." in u else "jpg").lower()
+    ctype = {
+        "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+        "gif": "image/gif", "webp": "image/webp",
+    }.get(ext, "application/octet-stream")
+
+    async def _gen():
+        try:
+            async for chunk in client.stream_image(u):
+                yield chunk
+        except ProxyPoolEmpty:
+            return
+        except Exception as e:
+            logging.warning(f"[nh.img] {type(e).__name__}: {e}")
+            return
+
+    return StreamingResponse(
+        _gen(),
+        media_type=ctype,
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "X-NH-Proxy": "1",
+        },
+    )
+
+
+# ── Proxy management API ─────────────────────────────────
+@app.post("/api/h/proxies/add")
+async def api_nh_proxy_add(request: Request,
+                           scheme: str = Form("http"), host: str = Form(...),
+                           port: int = Form(...), username: str = Form(""),
+                           password: str = Form("")):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    d = get_db()
+    try:
+        rid = db.proxy_add(d, scheme, host, port, username, password, source="manual")
+    finally:
+        d.close()
+    if rid == -1:
+        return JSONResponse({"error": "pool full (max 20)"}, 400)
+    if rid == 0:
+        return JSONResponse({"error": "duplicate"}, 409)
+    return {"ok": True, "id": rid}
+
+
+@app.post("/api/h/proxies/scrape")
+async def api_nh_proxy_scrape(request: Request, limit: int = Form(100), validate_: int = Form(1, alias="validate")):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    try:
+        items = await nh_sources_mod.scrape_all(limit=int(limit or 100))
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, 500)
+
+    # Mark which ones are already in pool
+    d = get_db()
+    try:
+        existing = {(p["scheme"], p["host"], int(p["port"])) for p in db.proxy_list(d)}
+    finally:
+        d.close()
+    for it in items:
+        it["already_in_pool"] = (it["scheme"], it["host"], int(it["port"])) in existing
+        it["alive"] = None  # unknown until validated
+        it["latency_ms"] = 0
+        it["status"] = ""
+
+    # Optional: validate paralel (stage-1 only — fast filter for "is the proxy alive?")
+    if int(validate_ or 0) == 1 and items:
+        sem = asyncio.Semaphore(20)
+
+        async def _validate(it):
+            if it["already_in_pool"]:
+                return
+            async with sem:
+                ok, latency, status = await ProxyPool._test_one(
+                    it, "http://httpbin.org/ip", timeout=5.0
+                )
+                it["alive"] = bool(ok)
+                it["latency_ms"] = latency
+                it["status"] = status
+
+        await asyncio.gather(*[_validate(it) for it in items])
+
+    alive_count = sum(1 for it in items if it.get("alive"))
+    return {
+        "ok": True,
+        "count": len(items),
+        "alive_count": alive_count,
+        "validated": bool(int(validate_ or 0)),
+        "candidates": items,
+    }
+
+
+@app.post("/api/h/proxies/bulk-add")
+async def api_nh_proxy_bulk_add(request: Request):
+    """Parse multiline text input, optionally validate each, insert into pool.
+
+    Accepts JSON: {text: str, validate: bool}
+    Supported formats per line:
+        host:port
+        host:port:user:pass         (Webshare-style)
+        user:pass@host:port
+        scheme://host:port
+        scheme://user:pass@host:port
+    """
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    try:
+        body = await request.json()
+        text = str(body.get("text") or "")
+        validate = bool(body.get("validate", True))
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, 400)
+
+    parsed, invalid_lines = ProxyPool.parse_text(text)
+    if not parsed:
+        return {"ok": True, "parsed": 0, "inserted": 0, "skipped": 0,
+                "alive": 0, "invalid_lines": invalid_lines, "pool_full": False}
+
+    # Optional validate (stage-1 only, fast)
+    alive_flags: list[bool] = [True] * len(parsed)
+    if validate:
+        sem = asyncio.Semaphore(20)
+
+        async def _validate(idx, p):
+            async with sem:
+                ok, _, _ = await ProxyPool._test_one(p, "http://httpbin.org/ip", timeout=5.0)
+                alive_flags[idx] = bool(ok)
+
+        await asyncio.gather(*[_validate(i, p) for i, p in enumerate(parsed)])
+
+    # Insert (skip dead if validate=True)
+    inserted, skipped, dead = 0, 0, 0
+    full = False
+    d = get_db()
+    try:
+        for p, alive in zip(parsed, alive_flags):
+            if validate and not alive:
+                dead += 1
+                continue
+            try:
+                rid = db.proxy_add(
+                    d, p["scheme"], p["host"], int(p["port"]),
+                    p.get("username", ""), p.get("password", ""),
+                    source="manual_bulk",
+                )
+            except Exception:
+                rid = 0
+            if rid == -1:
+                full = True
+                break
+            if rid > 0:
+                inserted += 1
+            else:
+                skipped += 1
+    finally:
+        d.close()
+    return {
+        "ok": True,
+        "parsed": len(parsed),
+        "alive": sum(1 for a in alive_flags if a),
+        "inserted": inserted,
+        "skipped": skipped,
+        "dead": dead,
+        "invalid_lines": invalid_lines,
+        "pool_full": full,
+    }
+
+
+@app.post("/api/h/proxies/import")
+async def api_nh_proxy_import(request: Request):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    try:
+        body = await request.json()
+        items = body.get("items") or []
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, 400)
+
+    inserted = 0
+    skipped = 0
+    full = False
+    d = get_db()
+    try:
+        for it in items:
+            try:
+                rid = db.proxy_add(
+                    d,
+                    str(it.get("scheme", "http")),
+                    str(it.get("host", "")),
+                    int(it.get("port", 0)),
+                    str(it.get("username", "")),
+                    str(it.get("password", "")),
+                    source=str(it.get("source", "scrape")),
+                )
+            except Exception:
+                rid = 0
+            if rid == -1:
+                full = True
+                break
+            if rid > 0:
+                inserted += 1
+            else:
+                skipped += 1
+    finally:
+        d.close()
+    return {"ok": True, "inserted": inserted, "skipped": skipped, "pool_full": full}
+
+
+@app.post("/api/h/proxies/{pid}/toggle")
+async def api_nh_proxy_toggle(request: Request, pid: int):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    d = get_db()
+    try:
+        p = db.proxy_get(d, pid)
+        if not p:
+            return JSONResponse({"error": "not found"}, 404)
+        new_state = not bool(p["enabled"])
+        db.proxy_set_enabled(d, pid, new_state)
+    finally:
+        d.close()
+    return {"ok": True, "enabled": new_state}
+
+
+@app.delete("/api/h/proxies/{pid}")
+async def api_nh_proxy_delete(request: Request, pid: int):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    d = get_db()
+    try:
+        db.proxy_remove(d, pid)
+    finally:
+        d.close()
+    return {"ok": True}
+
+
+@app.post("/api/h/proxies/clear-disabled")
+async def api_nh_proxy_clear_disabled(request: Request):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    n = _nh_pool.clear_disabled()
+    return {"ok": True, "removed": n}
+
+
+@app.post("/api/h/proxies/test/{pid}")
+async def api_nh_proxy_test(request: Request, pid: int):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    p = _nh_pool.get(pid)
+    if not p:
+        return JSONResponse({"error": "not found"}, 404)
+    ok, latency, status = await ProxyPool.test(p, timeout=10.0)
+    if ok:
+        _nh_pool.record_success(pid, latency)
+    else:
+        _nh_pool.record_failure(pid, status)
+    return {"ok": ok, "latency_ms": latency, "status": status}
+
+
+async def _nh_test_all_bg():
+    """Background task: test every proxy in pool concurrently (limit 5)."""
+    try:
+        proxies = _nh_pool.list()
+        _nh_test_state["total"] = len(proxies)
+        _nh_test_state["done"] = 0
+        _nh_test_state["ok"] = 0
+        _nh_test_state["fail"] = 0
+        _nh_test_state["started_at"] = _time.time()
+
+        sem = asyncio.Semaphore(5)
+
+        async def _one(p):
+            async with sem:
+                ok, latency, status = await ProxyPool.test(p, timeout=10.0)
+                if ok:
+                    _nh_pool.record_success(p["id"], latency)
+                    _nh_test_state["ok"] += 1
+                else:
+                    _nh_pool.record_failure(p["id"], status)
+                    _nh_test_state["fail"] += 1
+                _nh_test_state["done"] += 1
+
+        await asyncio.gather(*[_one(p) for p in proxies])
+    finally:
+        _nh_test_state["running"] = False
+
+
+@app.post("/api/h/proxies/test-all")
+async def api_nh_proxy_test_all(request: Request):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    if _nh_test_state["running"]:
+        return JSONResponse({"error": "already running"}, 409)
+    _nh_test_state["running"] = True
+    asyncio.create_task(_nh_test_all_bg())
+    return {"ok": True, "started": True}
+
+
+@app.get("/api/h/proxies/test-all/status")
+async def api_nh_proxy_test_all_status(request: Request):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    return dict(_nh_test_state)
+
+
+@app.get("/api/h/proxies/list")
+async def api_nh_proxy_list(request: Request):
+    user, gate = _nh_gate(request)
+    if gate is not None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    d = get_db()
+    try:
+        items = db.proxy_list(d)
+        total = db.proxy_count(d)
+        active = db.proxy_count(d, only_enabled=True)
+    finally:
+        d.close()
+    return {"ok": True, "total": total, "active": active,
+            "max": db.PROXY_POOL_MAX, "items": items}
+
+
+# ── Projects (server-wide monitoring & management) ──────
+# Phase 1: read snapshot of registered projects + perform start/stop/restart
+# via adapters. Future phases will add discovery, multi-tail logs, alerts.
+from app.projects import get_project_service  # noqa: E402
+from app.projects import discovery as _discovery  # noqa: E402
+
+_project_svc = get_project_service()
+
+VALID_KINDS = {"supervisor", "systemd", "apache_vhost", "port", "custom"}
+VALID_CONTROLS = {"read", "restart", "full"}
+
+
+@app.get("/projects", response_class=HTMLResponse)
+async def projects_page(request: Request):
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+    # Auto-adopt safe candidates the first time someone opens this page so the
+    # overview is non-empty without requiring the user to navigate Registry.
+    try:
+        _project_svc.auto_adopt(actor=user or "auto")
+    except Exception:
+        pass
+    snap = _project_svc.snapshot(force=False)
+    # Pisahkan project ke 2 grup utama untuk template baru
+    apps = [p for p in snap["projects"]
+            if p.get("kind") in ("supervisor", "systemd", "custom", "port")]
+    sites = [p for p in snap["projects"] if p.get("kind") == "apache_vhost"]
+    # Scan folder /var/www
+    try:
+        from app.projects.discovery import discover_www_folders
+        folders = discover_www_folders()
+    except Exception:
+        folders = []
+    return tpl.TemplateResponse(request, "projects.html", context={
+        "user": user,
+        "page": "projects",
+        "stats": sys_stats(),
+        "services": get_all_services(),
+        "snapshot": snap,
+        "apps": apps,
+        "sites": sites,
+        "folders": folders,
+    })
+
+
+# IMPORTANT: register specific sub-paths BEFORE the dynamic /projects/{slug}
+# route, otherwise FastAPI matches the dynamic route first and we redirect.
+@app.get("/projects/registry")
+async def projects_registry_redirect(request: Request):
+    """Halaman Registry lama dihapus. Edit dilakukan via modal di overview."""
+    return RedirectResponse("/projects", 301)
+
+
+@app.get("/projects/activity")
+async def projects_activity_redirect(request: Request):
+    """Activity lama digabung ke Riwayat."""
+    return RedirectResponse("/projects/history", 301)
+
+
+@app.get("/projects/logs")
+async def projects_logs_redirect(request: Request):
+    """Multi-tail logs dihapus. Pakai tab Logs di /projects/{slug}."""
+    return RedirectResponse("/projects", 301)
+
+
+@app.get("/projects/scheduler")
+async def projects_scheduler_redirect(request: Request):
+    """Scheduler dihapus dari UI. Info ringkas tampil di overview."""
+    return RedirectResponse("/projects", 301)
+
+
+@app.get("/projects/audit")
+async def projects_audit_redirect(request: Request):
+    """Audit lama digabung ke Riwayat."""
+    return RedirectResponse("/projects/history", 301)
+
+
+@app.get("/projects/health")
+async def projects_health_redirect(request: Request):
+    """Halaman Health lama → Pemberitahuan."""
+    return RedirectResponse("/projects/notifications", 301)
+
+
+@app.get("/projects/notifications", response_class=HTMLResponse)
+async def projects_notifications_page(request: Request):
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+    d = get_db()
+    try:
+        inbox_open = db.list_error_inbox(d, status="open", limit=50)
+        counts = db.error_inbox_counts(d)
+        rules = db.list_alert_rules(d)
+        global_webhook = db.get_setting(d, "alert_webhook_url", "")
+    finally:
+        d.close()
+    # Hitung state preset (rule yang dibuat dari preset toggle, prefix "Auto: ")
+    auto_names = [(r.get("name") or "") for r in rules]
+    presets = {
+        "app_down":     any(n.startswith("Auto: aplikasi mati") for n in auto_names),
+        "repeat_error": any(n.startswith("Auto: error berulang") for n in auto_names),
+        "web_down":     any(n.startswith("Auto: website down") for n in auto_names),
+        "disk_full":    any(n.startswith("Auto: memory tinggi") for n in auto_names),
+    }
+    return tpl.TemplateResponse(request, "projects_notifications.html", context={
+        "user": user,
+        "page": "projects",
+        "services": get_all_services(),
+        "inbox_open": inbox_open,
+        "counts": counts,
+        "presets": presets,
+        "global_webhook": global_webhook,
+    })
+
+
+@app.get("/projects/history", response_class=HTMLResponse)
+async def projects_history_page(request: Request):
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+    d = get_db()
+    try:
+        all_projects = db.list_projects(d, only_enabled=False)
+    finally:
+        d.close()
+    return tpl.TemplateResponse(request, "projects_history.html", context={
+        "user": user,
+        "page": "projects",
+        "services": get_all_services(),
+        "all_projects": all_projects,
+    })
+
+
+@app.get("/projects/{slug}", response_class=HTMLResponse)
+async def projects_detail_page(request: Request, slug: str):
+    user = get_user(request)
+    if not user:
+        return RedirectResponse("/login", 302)
+    project = _project_svc.get_project(slug)
+    if project is None:
+        return RedirectResponse("/projects", 302)
+    snap = _project_svc.snapshot(force=False)
+    project_card = next((x for x in snap["projects"] if x["slug"] == slug), None)
+    d = get_db()
+    try:
+        events = db.list_project_events(d, project_id=project["id"], limit=30)
+        actions = db.list_project_actions(d, limit=20, project_slug=slug)
+    finally:
+        d.close()
+    log_tail = ""
+    for lp in (project.get("log_paths") or []):
+        try:
+            from pathlib import Path as _P
+            p = _P(lp)
+            if not p.exists():
+                continue
+            size = p.stat().st_size
+            chunk = 8192
+            data = b""
+            with p.open("rb") as fh:
+                pos = size
+                while pos > 0 and data.count(b"\n") < 200:
+                    rs = min(chunk, pos)
+                    pos -= rs
+                    fh.seek(pos)
+                    data = fh.read(rs) + data
+            log_tail = data.decode("utf-8", errors="replace")
+            log_tail = "\n".join(log_tail.splitlines()[-200:])
+            break
+        except Exception:
+            continue
+    return tpl.TemplateResponse(request, "project_detail.html", context={
+        "user": user,
+        "page": "projects",
+        "services": get_all_services(),
+        "project": project,
+        "card": project_card,
+        "events": events,
+        "actions": actions,
+        "log_tail": log_tail,
+    })
+
+
+@app.get("/api/projects/snapshot")
+async def api_projects_snapshot(request: Request):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    return _project_svc.snapshot(force=False)
+
+
+# IMPORTANT: register specific sub-paths BEFORE /api/projects/{slug}
+@app.get("/api/projects/discovery")
+async def api_projects_discovery(request: Request, include_adopted: int = 0):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    return _discovery.discover_all(include_adopted=bool(include_adopted))
+
+
+@app.get("/api/projects/www-folders")
+async def api_projects_www_folders(request: Request):
+    """Live list semua folder di /var/www + status vhost-nya.
+
+    Dipakai halaman /projects (grup ketiga) untuk auto-refresh tanpa reload
+    snapshot project. Read-only — tidak menulis ke DB.
+    """
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        from app.projects.discovery import discover_www_folders
+        return {"folders": discover_www_folders()}
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e), "folders": []}, 500)
+
+
+@app.post("/api/projects/auto-adopt")
+async def api_projects_auto_adopt(request: Request):
+    """Manual trigger auto-adopt. Hanya jalan kalau registry kosong."""
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    res = _project_svc.auto_adopt(actor=user)
+    return res
+
+
+# IMPORTANT: register `/api/projects/health/...` and `/api/projects/alert-rules`
+# BEFORE the dynamic `/api/projects/{slug}` route below, otherwise the dynamic
+# matcher captures "health" or "alert-rules" as a slug. The actual handlers are
+# defined later at end-of-file (Phase 4 block); we re-export their behaviour
+# here as proxy handlers so the routes resolve in correct precedence order.
+@app.get("/api/projects/health/inbox", name="api_inbox_list_early")
+async def _api_inbox_list_early(request: Request, status: str = "open",
+                                project_slug: str = "", limit: int = 100):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        items = db.list_error_inbox(d, status=status,
+                                    project_slug=project_slug or None,
+                                    limit=max(1, min(int(limit), 500)))
+        counts = db.error_inbox_counts(d)
+    finally:
+        d.close()
+    return {"items": items, "counts": counts}
+
+
+@app.post("/api/projects/health/inbox/bulk", name="api_inbox_bulk_early")
+async def _api_inbox_bulk_early(request: Request):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    ids = body.get("ids") or []
+    status = (body.get("status") or "").strip()
+    if not ids or status not in ("open", "acknowledged", "resolved", "ignored"):
+        return JSONResponse({"ok": False, "error": "ids[] + valid status required"}, 400)
+    d = get_db()
+    try:
+        for i in ids:
+            try:
+                db.update_error_inbox_status(d, int(i), status, actor=user)
+            except Exception:
+                continue
+    finally:
+        d.close()
+    return {"ok": True, "count": len(ids)}
+
+
+@app.post("/api/projects/health/inbox/{inbox_id}/{status}", name="api_inbox_set_status_early")
+async def _api_inbox_set_status_early(request: Request, inbox_id: int, status: str):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    if status not in ("open", "acknowledged", "resolved", "ignored"):
+        return JSONResponse({"ok": False, "error": "invalid status"}, 400)
+    d = get_db()
+    try:
+        ok = db.update_error_inbox_status(d, int(inbox_id), status, actor=user)
+    finally:
+        d.close()
+    return {"ok": ok}
+
+
+@app.post("/api/projects/health/test-webhook", name="api_test_webhook_early")
+async def _api_test_webhook_early(request: Request):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    url = (body.get("url") or "").strip()
+    if not url:
+        d = get_db()
+        try:
+            url = db.get_setting(d, "alert_webhook_url", "").strip()
+        finally:
+            d.close()
+    if not url:
+        return JSONResponse({"ok": False, "error": "no webhook url"}, 400)
+    from app.projects.dispatcher import test_webhook
+    ok, msg = await test_webhook(url)
+    return {"ok": ok, "message": msg}
+
+
+@app.get("/api/projects/alert-rules", name="api_alert_rules_list_early")
+async def _api_alert_rules_list_early(request: Request, project_id: int = 0,
+                                      only_enabled: int = 0):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        rules = db.list_alert_rules(
+            d,
+            project_id=project_id if project_id else None,
+            only_enabled=bool(only_enabled),
+        )
+        history = db.list_alert_history(d, limit=20)
+    finally:
+        d.close()
+    return {"rules": rules, "history": history}
+
+
+@app.post("/api/projects/alert-rules", name="api_alert_rule_create_early")
+async def _api_alert_rule_create_early(request: Request):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    ok, err = _validate_alert_payload(body) if "_validate_alert_payload" in globals() else (True, "")
+    # _validate_alert_payload is defined later — use inline copy
+    valid_kinds = {"rss_high", "cpu_high", "state_not", "port_down",
+                   "http_check", "restart_count", "log_pattern"}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name required"}, 400)
+    kind = (body.get("kind") or "").strip()
+    if kind not in valid_kinds:
+        return JSONResponse({"ok": False, "error": f"kind must be one of {sorted(valid_kinds)}"}, 400)
+    cond = body.get("condition") or {}
+    if kind == "log_pattern":
+        if not (cond.get("pattern") or "").strip():
+            return JSONResponse({"ok": False, "error": "log_pattern requires condition.pattern"}, 400)
+        try:
+            re.compile(cond["pattern"])
+        except re.error as e:
+            return JSONResponse({"ok": False, "error": f"invalid regex: {e}"}, 400)
+    body.pop("id", None)
+    d = get_db()
+    try:
+        rid = db.upsert_alert_rule(d, body)
+    finally:
+        d.close()
+    return {"ok": True, "id": rid}
+
+
+@app.patch("/api/projects/alert-rules/{rule_id}", name="api_alert_rule_update_early")
+async def _api_alert_rule_update_early(request: Request, rule_id: int):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    d = get_db()
+    try:
+        existing = db.get_alert_rule(d, int(rule_id))
+        if not existing:
+            return JSONResponse({"ok": False, "error": "not found"}, 404)
+        merged = dict(existing)
+        for k, v in body.items():
+            merged[k] = v
+        merged["id"] = int(rule_id)
+        rid = db.upsert_alert_rule(d, merged)
+    finally:
+        d.close()
+    return {"ok": True, "id": rid}
+
+
+@app.delete("/api/projects/alert-rules/{rule_id}", name="api_alert_rule_delete_early")
+async def _api_alert_rule_delete_early(request: Request, rule_id: int):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        db.delete_alert_rule(d, int(rule_id))
+    finally:
+        d.close()
+    return {"ok": True}
+
+
+@app.post("/api/projects/alert-rules/{rule_id}/test", name="api_alert_rule_test_early")
+async def _api_alert_rule_test_early(request: Request, rule_id: int):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        rule = db.get_alert_rule(d, int(rule_id))
+        if not rule:
+            return JSONResponse({"ok": False, "error": "not found"}, 404)
+        project = (db.get_project_by_id(d, rule["project_id"])
+                   if rule.get("project_id") else None)
+    finally:
+        d.close()
+    from app.projects.dispatcher import dispatch
+    snap = {
+        "level": "info",
+        "kind": rule.get("kind"),
+        "detail": "Manual test fire from /projects/health",
+    }
+    ok, msg = await dispatch(rule, project, snap)
+    return {"ok": ok, "message": msg}
+
+
+# Phase 5: scheduler + audit — also registered BEFORE /api/projects/{slug}.
+@app.get("/api/projects/scheduler", name="api_scheduler_list_early")
+async def _api_scheduler_list_early(request: Request, include_cron: int = 1):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    from app.projects.scheduler import list_all_jobs
+    return list_all_jobs(include_cron=bool(include_cron))
+
+
+@app.post("/api/projects/scheduler/run", name="api_scheduler_run_early")
+async def _api_scheduler_run_early(request: Request):
+    """Trigger a scheduler job by id. Currently delegates to:
+       - scraper:<slug>     → restart that supervisor service
+       - telegram-backup    → call tg_backup_now()
+    """
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    job_id = (body.get("id") or "").strip()
+    if not job_id:
+        return JSONResponse({"ok": False, "error": "id required"}, 400)
+    if job_id.startswith("scraper:"):
+        slug = job_id.split(":", 1)[1]
+        result = _project_svc.perform_action(slug, "restart", actor=user)
+        return {"ok": result.ok, "message": result.message,
+                "duration_ms": result.duration_ms}
+    if job_id == "telegram-backup":
+        res = await tg_backup_now(trigger="manual")
+        return {"ok": res.get("status") == "ok", "message": str(res)}
+    return JSONResponse({"ok": False, "error": "job kind not runnable from UI"}, 400)
+
+
+@app.get("/api/projects/audit", name="api_audit_list_early")
+async def _api_audit_list_early(request: Request, project_slug: str = "",
+                                limit: int = 200, format: str = "json"):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        actions = db.list_project_actions(
+            d,
+            limit=max(1, min(int(limit), 1000)),
+            project_slug=project_slug or None,
+        )
+    finally:
+        d.close()
+    if format == "csv":
+        import io
+        import csv as _csv
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(["ts", "actor", "action", "project_slug", "result",
+                    "duration_ms", "message", "params"])
+        for a in actions:
+            w.writerow([
+                a.get("ts", ""),
+                a.get("actor", ""),
+                a.get("action", ""),
+                a.get("project_slug", ""),
+                a.get("result", ""),
+                a.get("duration_ms", 0),
+                (a.get("message") or "").replace("\n", " "),
+                json.dumps(a.get("params") or {}, separators=(",", ":")),
+            ])
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition":
+                     'attachment; filename="audit-log.csv"'},
+        )
+    return {"items": actions, "count": len(actions)}
+
+
+@app.get("/api/projects/history", name="api_history_merged")
+async def api_projects_history(request: Request,
+                               since_days: int = 7,
+                               project_slug: str = "",
+                               limit: int = 300):
+    """Gabungan riwayat: project_actions (siapa-melakukan-apa) +
+    project_events (status transitions, sistem). Sudah disortir menurun
+    waktu, siap dipakai langsung oleh halaman /projects/history.
+    """
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    limit = max(10, min(int(limit), 1000))
+    since_days = max(1, min(int(since_days), 365))
+    d = get_db()
+    try:
+        actions = db.list_project_actions(
+            d, limit=limit, project_slug=project_slug or None)
+        # project_events tidak punya filter slug langsung, ambil banyak lalu
+        # filter di python
+        events = db.list_project_events(d, project_id=None, limit=limit)
+    finally:
+        d.close()
+
+    # Normalisasi ke shape yang sama supaya mudah di-render
+    merged: list[dict] = []
+    for a in actions:
+        merged.append({
+            "type": "action",
+            "ts": a.get("ts") or "",
+            "actor": a.get("actor") or "",
+            "project_slug": a.get("project_slug") or "",
+            "title": _humanize_action(a),
+            "detail": a.get("message") or "",
+            "result": a.get("result") or "",
+            "duration_ms": a.get("duration_ms") or 0,
+            "level": "info" if (a.get("result") == "ok") else "error",
+        })
+    for e in events:
+        if project_slug and e.get("project_slug") != project_slug:
+            continue
+        merged.append({
+            "type": "event",
+            "ts": e.get("ts") or "",
+            "actor": "sistem",
+            "project_slug": e.get("project_slug") or "",
+            "title": _humanize_event(e),
+            "detail": e.get("message") or "",
+            "result": "",
+            "duration_ms": 0,
+            "level": e.get("level") or "info",
+        })
+
+    # Filter umur
+    cutoff_iso = (datetime.utcnow() - timedelta(days=since_days)).isoformat()
+    merged = [m for m in merged if (m.get("ts") or "") >= cutoff_iso]
+
+    # Sort desc
+    merged.sort(key=lambda m: m.get("ts") or "", reverse=True)
+    return {"items": merged[:limit], "count": len(merged[:limit])}
+
+
+def _humanize_action(a: dict) -> str:
+    """Konversi action row → kalimat Bahasa Indonesia singkat."""
+    actor = a.get("actor") or "seseorang"
+    action = (a.get("action") or "").lower()
+    slug = a.get("project_slug") or ""
+    verb = {
+        "start": "memulai",
+        "stop": "menghentikan",
+        "restart": "merestart",
+        "register": "mendaftarkan",
+        "config_save": "menyimpan konfigurasi",
+        "delete": "menghapus",
+    }.get(action, action or "memproses")
+    if slug:
+        return f"{actor} {verb} {slug}"
+    return f"{actor} {verb}"
+
+
+def _humanize_event(e: dict) -> str:
+    """Konversi event row → kalimat Bahasa Indonesia singkat."""
+    kind = (e.get("kind") or "").lower()
+    slug = e.get("project_slug") or "(?)"
+    msg = e.get("message") or ""
+    if kind == "status":
+        # message biasanya "<slug>: <from> → <to>"
+        # contoh: "komiku-scraper: stopped → running"
+        meta = e.get("meta") or {}
+        fr = meta.get("from", "")
+        to = meta.get("to", "")
+        state_id = {
+            "running": "jalan",
+            "stopped": "mati",
+            "starting": "memulai",
+            "fatal": "error",
+            "unknown": "tidak diketahui",
+        }
+        if fr and to:
+            fr_id = state_id.get(fr, fr)
+            to_id = state_id.get(to, to)
+            return f"{slug}: {fr_id} → {to_id}"
+        return msg or f"{slug}: status berubah"
+    if kind == "action":
+        return msg or f"{slug}: aksi"
+    if kind == "alert":
+        return msg or f"{slug}: alert dipicu"
+    return msg or f"{slug}: {kind}"
+
+
+@app.post("/api/projects/notifications/preset", name="api_notif_preset")
+async def api_notifications_preset(request: Request):
+    """Toggle preset notifikasi sederhana (4 checkbox).
+
+    Body: {"key": "app_down|repeat_error|web_down|disk_full",
+           "enabled": bool}
+
+    Translasi ke alert_rule:
+      - app_down       → kind=state_not, condition={state:"running"},
+                          project_id=None (global), name="Auto: aplikasi mati"
+      - repeat_error   → kind=restart_count, condition={count:3, window_min:5},
+                          project_id=None, name="Auto: error berulang"
+      - web_down       → kind=http_check per apache_vhost dengan ServerName
+                          name="Auto: website down · {domain}"
+      - disk_full      → kind=rss_high, project_id=None, max_mb=4096
+                          name="Auto: memory tinggi"
+                          (catatan: kind disk_full belum ada di evaluator,
+                           untuk sementara pakai rss_high global sebagai
+                           proxy; bisa ditambahkan kind disk_high nanti)
+    """
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    key = (body.get("key") or "").strip()
+    enabled = bool(body.get("enabled"))
+    valid = {"app_down", "repeat_error", "web_down", "disk_full"}
+    if key not in valid:
+        return JSONResponse({"ok": False, "error": f"key must be one of {sorted(valid)}"}, 400)
+
+    d = get_db()
+    try:
+        # Ambil semua rule auto (yang dibuat preset). Kita identifikasi via
+        # name yang diawali "Auto: " — namespace khusus preset.
+        all_rules = db.list_alert_rules(d)
+        auto_rules = [r for r in all_rules if (r.get("name") or "").startswith("Auto: ")]
+
+        # Hapus rule auto lama untuk preset ini, biar idempotent saat re-toggle
+        prefix_for_key = {
+            "app_down":     "Auto: aplikasi mati",
+            "repeat_error": "Auto: error berulang",
+            "web_down":     "Auto: website down",
+            "disk_full":    "Auto: memory tinggi",
+        }[key]
+        for r in auto_rules:
+            if (r.get("name") or "").startswith(prefix_for_key):
+                try:
+                    db.delete_alert_rule(d, r["id"])
+                except Exception:
+                    pass
+
+        created = 0
+        if enabled:
+            if key == "app_down":
+                db.upsert_alert_rule(d, {
+                    "name": "Auto: aplikasi mati",
+                    "kind": "state_not",
+                    "condition": {"state": "running"},
+                    "project_id": None,
+                    "enabled": True,
+                    "cooldown_min": 10,
+                })
+                created = 1
+            elif key == "repeat_error":
+                db.upsert_alert_rule(d, {
+                    "name": "Auto: error berulang",
+                    "kind": "restart_count",
+                    "condition": {"count": 3, "window_min": 5},
+                    "project_id": None,
+                    "enabled": True,
+                    "cooldown_min": 15,
+                })
+                created = 1
+            elif key == "web_down":
+                # Buat rule per apache_vhost dengan ServerName valid
+                projects = db.list_projects(d, only_enabled=True)
+                from app.projects.adapters import get_adapter_for
+                for p in projects:
+                    if p.get("kind") != "apache_vhost":
+                        continue
+                    try:
+                        st = get_adapter_for(p).status(p)
+                        sn = (st.extra or {}).get("server_name") or ""
+                    except Exception:
+                        sn = ""
+                    if not sn or sn in ("_", "*"):
+                        continue
+                    db.upsert_alert_rule(d, {
+                        "name": f"Auto: website down · {sn}",
+                        "kind": "http_check",
+                        "condition": {"url": f"http://{sn}", "expect": 200},
+                        "project_id": p["id"],
+                        "enabled": True,
+                        "cooldown_min": 10,
+                    })
+                    created += 1
+            elif key == "disk_full":
+                # Sementara pakai rss_high global ~ 4GB sebagai indikator
+                # tekanan memory. Kalau perlu kind disk_high, tambah di
+                # evaluator.
+                db.upsert_alert_rule(d, {
+                    "name": "Auto: memory tinggi",
+                    "kind": "rss_high",
+                    "condition": {"max_mb": 4096},
+                    "project_id": None,
+                    "enabled": True,
+                    "cooldown_min": 30,
+                })
+                created = 1
+    finally:
+        d.close()
+
+    return {"ok": True, "key": key, "enabled": enabled, "created": created}
+
+
+@app.get("/api/projects/notifications/preset-state",
+         name="api_notif_preset_state")
+async def api_notifications_preset_state(request: Request):
+    """Return current state of 4 presets (untuk inisialisasi UI)."""
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        all_rules = db.list_alert_rules(d)
+    finally:
+        d.close()
+    names = [(r.get("name") or "") for r in all_rules]
+    state = {
+        "app_down":     any(n.startswith("Auto: aplikasi mati") for n in names),
+        "repeat_error": any(n.startswith("Auto: error berulang") for n in names),
+        "web_down":     any(n.startswith("Auto: website down") for n in names),
+        "disk_full":    any(n.startswith("Auto: memory tinggi") for n in names),
+    }
+    return {"presets": state}
+
+
+@app.get("/api/security/banned-ips", name="api_security_banned_ips")
+async def api_security_banned_ips(request: Request):
+    """Return daftar IP yang sedang diblokir fail2ban + ringkasan jumlah ban.
+
+    Read-only — endpoint ini tidak melakukan ban/unban. Hasil di-cache 10 detik
+    di module security supaya polling berkala dari banyak tab tetap responsif.
+    """
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        from app import security as _sec
+        return await _sec.get_status()
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(
+            {"installed": False, "error": str(e),
+             "summary": {"total_jails": 0, "total_banned_now": 0,
+                         "total_ban_lifetime": 0},
+             "banned": []},
+            500,
+        )
+
+
+@app.get("/api/projects/{slug}")
+async def api_project_detail(request: Request, slug: str):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    project = _project_svc.get_project(slug)
+    if project is None:
+        return JSONResponse({"error": "not found"}, 404)
+    snap = _project_svc.snapshot(force=False)
+    card = next((x for x in snap["projects"] if x["slug"] == slug), None)
+    d = get_db()
+    try:
+        events = db.list_project_events(d, project_id=project["id"], limit=30)
+        actions = db.list_project_actions(d, limit=20, project_slug=slug)
+    finally:
+        d.close()
+    return {
+        "project": project,
+        "card": card,
+        "events": events,
+        "actions": actions,
+    }
+
+
+@app.post("/api/projects/{slug}/action")
+async def api_project_action(request: Request, slug: str):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    action = (body.get("action") or "").strip().lower()
+    if action not in ("start", "stop", "restart"):
+        return JSONResponse({"ok": False, "error": "invalid action"}, 400)
+    result = _project_svc.perform_action(slug, action, actor=user)
+    return {
+        "ok": result.ok,
+        "message": result.message,
+        "duration_ms": result.duration_ms,
+    }
+
+
+# ── Phase 2: Registry CRUD + Discovery ──────────────────
+
+
+def _validate_project_payload(data: dict) -> tuple[bool, str]:
+    slug = (data.get("slug") or "").strip()
+    if not slug or not re.match(r"^[a-z0-9][a-z0-9-]*$", slug):
+        return False, "slug must be lowercase alphanumeric (with dashes)"
+    name = (data.get("name") or "").strip()
+    if not name:
+        return False, "name is required"
+    kind = (data.get("kind") or "").strip()
+    if kind not in VALID_KINDS:
+        return False, f"kind must be one of {sorted(VALID_KINDS)}"
+    control = (data.get("control") or "full").strip()
+    if control not in VALID_CONTROLS:
+        return False, f"control must be one of {sorted(VALID_CONTROLS)}"
+    if kind == "custom":
+        if not (data.get("custom_start") or data.get("custom_stop")
+                or data.get("custom_status") or data.get("expected_port")):
+            return False, "custom kind requires at least one command or expected_port"
+    return True, ""
+
+
+@app.post("/api/projects")
+async def api_project_create(request: Request):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    ok, err = _validate_project_payload(body)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err}, 400)
+    d = get_db()
+    try:
+        # Check duplicate slug
+        if db.get_project(d, body["slug"]):
+            return JSONResponse({"ok": False, "error": "slug already exists"}, 409)
+        pid = db.upsert_project(d, body)
+        db.log_project_action(d, project_slug=body["slug"], project_id=pid,
+                              actor=user, action="register",
+                              message=f"created via {body.get('kind')}",
+                              params={"source_ref": body.get("source_ref", "")})
+    finally:
+        d.close()
+    # Bust snapshot cache
+    _project_svc._snapshot_cache["data"] = None
+    return {"ok": True, "id": pid, "slug": body["slug"]}
+
+
+@app.patch("/api/projects/{slug}")
+async def api_project_update(request: Request, slug: str):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    d = get_db()
+    try:
+        existing = db.get_project(d, slug)
+        if not existing:
+            return JSONResponse({"ok": False, "error": "not found"}, 404)
+        # Merge updates onto existing record
+        merged = dict(existing)
+        for k, v in body.items():
+            if k == "slug":
+                continue  # never rename slug via PATCH
+            merged[k] = v
+        ok, err = _validate_project_payload(merged)
+        if not ok:
+            return JSONResponse({"ok": False, "error": err}, 400)
+        pid = db.upsert_project(d, merged)
+        db.log_project_action(d, project_slug=slug, project_id=pid,
+                              actor=user, action="config_save",
+                              message="registry updated",
+                              params={"fields": list(body.keys())})
+    finally:
+        d.close()
+    _project_svc._snapshot_cache["data"] = None
+    return {"ok": True, "id": pid}
+
+
+@app.delete("/api/projects/{slug}")
+async def api_project_delete(request: Request, slug: str):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    # Hard guard: never delete the dashboard's own project
+    if slug == "dashboard":
+        return JSONResponse({"ok": False, "error": "cannot delete dashboard project"}, 400)
+    d = get_db()
+    try:
+        existing = db.get_project(d, slug)
+        if not existing:
+            return JSONResponse({"ok": False, "error": "not found"}, 404)
+        db.delete_project(d, slug)
+        db.log_project_action(d, project_slug=slug, project_id=None,
+                              actor=user, action="delete",
+                              message="removed from registry")
+    finally:
+        d.close()
+    _project_svc._snapshot_cache["data"] = None
+    return {"ok": True}
+
+
+# ── Project config (read/write the whitelisted config_paths via adapter) ──
+from app.projects.adapters import get_adapter_for as _get_adapter, AdapterError  # noqa: E402
+
+
+@app.get("/api/projects/{slug}/config")
+async def api_project_config_read(request: Request, slug: str, path: str):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    project = _project_svc.get_project(slug)
+    if not project:
+        return JSONResponse({"ok": False, "error": "not found"}, 404)
+    if path not in (project.get("config_paths") or []):
+        return JSONResponse({"ok": False, "error": "path not in whitelist"}, 400)
+    adapter = _get_adapter(project)
+    try:
+        content = adapter.config_read(project, path)
+    except AdapterError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, 400)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, 500)
+    return {"ok": True, "path": path, "content": content}
+
+
+@app.post("/api/projects/{slug}/config")
+async def api_project_config_write(request: Request, slug: str):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    path = (body.get("path") or "").strip()
+    content = body.get("content")
+    if not path or content is None:
+        return JSONResponse({"ok": False, "error": "path and content required"}, 400)
+    project = _project_svc.get_project(slug)
+    if not project:
+        return JSONResponse({"ok": False, "error": "not found"}, 404)
+    if path not in (project.get("config_paths") or []):
+        return JSONResponse({"ok": False, "error": "path not in whitelist"}, 400)
+    adapter = _get_adapter(project)
+    try:
+        result = adapter.config_write(project, path, content)
+    except AdapterError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, 400)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, 500)
+    # Audit log
+    d = get_db()
+    try:
+        db.log_project_action(d, project_slug=slug, project_id=project["id"],
+                              actor=user, action="config_save",
+                              result="ok" if result.ok else "error",
+                              message=result.message,
+                              duration_ms=result.duration_ms,
+                              params={"path": path, "bytes": len(content)})
+    finally:
+        d.close()
+    return {"ok": result.ok, "message": result.message,
+            "duration_ms": result.duration_ms}
+
+
+# ── Phase 3: Time-series + SSE streams + multi-tail ──────
+@app.get("/api/projects/{slug}/metrics")
+async def api_project_metrics(request: Request, slug: str, minutes: int = 60):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    minutes = max(5, min(minutes, 60 * 24 * 7))  # clamp 5min..7d
+    project = _project_svc.get_project(slug)
+    if not project:
+        return JSONResponse({"error": "not found"}, 404)
+    d = get_db()
+    try:
+        pts = db.get_project_metrics(d, project["id"], minutes=minutes,
+                                     max_points=120)
+    finally:
+        d.close()
+    return {
+        "slug": slug,
+        "minutes": minutes,
+        "points": pts,
+        "count": len(pts),
+    }
+
+
+# ── Live activity feed (SSE) ─────────────────────────────
+@app.get("/api/projects/activity/stream")
+async def api_projects_activity_stream(request: Request):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    from app.projects.events import get_broker
+    broker = get_broker()
+    queue = await broker.subscribe()
+
+    async def event_gen():
+        try:
+            # send a hello event first so client knows we're connected
+            yield f": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    # heartbeat to keep the connection alive
+                    yield f": heartbeat\n\n"
+                    continue
+                yield f"data: {json.dumps(payload)}\n\n"
+        finally:
+            await broker.unsubscribe(queue)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={
+                                 "Cache-Control": "no-cache",
+                                 "X-Accel-Buffering": "no",
+                                 "Connection": "keep-alive",
+                             })
+
+
+# ── Multi-tail logs SSE ──────────────────────────────────
+@app.get("/api/projects/logs/tail")
+async def api_projects_multi_tail(request: Request, slugs: str = "",
+                                  initial_lines: int = 30):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    slug_list = [s.strip() for s in (slugs or "").split(",") if s.strip()]
+    if not slug_list:
+        return JSONResponse({"error": "slugs= required"}, 400)
+    initial_lines = max(0, min(int(initial_lines or 30), 200))
+    from app.projects.log_stream import tail_multi
+
+    async def gen():
+        yield ": connected\n\n"
+        try:
+            async for payload in tail_multi(slug_list, initial_lines=initial_lines):
+                if await request.is_disconnected():
+                    break
+                yield f"data: {json.dumps(payload)}\n\n"
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={
+                                 "Cache-Control": "no-cache",
+                                 "X-Accel-Buffering": "no",
+                                 "Connection": "keep-alive",
+                             })
+
+
+@app.get("/api/projects/{slug}/logs/tail")
+async def api_project_log_tail(request: Request, slug: str,
+                               initial_lines: int = 100):
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    project = _project_svc.get_project(slug)
+    if not project:
+        return JSONResponse({"error": "not found"}, 404)
+    initial_lines = max(0, min(int(initial_lines or 100), 500))
+    from app.projects.log_stream import tail_for_project
+
+    async def gen():
+        yield ": connected\n\n"
+        try:
+            async for payload in tail_for_project(project, initial_lines=initial_lines):
+                if await request.is_disconnected():
+                    break
+                yield f"data: {json.dumps(payload)}\n\n"
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={
+                                 "Cache-Control": "no-cache",
+                                 "X-Accel-Buffering": "no",
+                                 "Connection": "keep-alive",
+                             })
+
+
+# ── Phase 4: Health (helper + global webhook setter) ─────
+# Note: actual route handlers for /api/projects/health/* and
+# /api/projects/alert-rules* are registered EARLIER (before /api/projects/{slug})
+# so the dynamic slug matcher doesn't capture "health" or "alert-rules".
+VALID_ALERT_KINDS = {
+    "rss_high", "cpu_high", "state_not", "port_down",
+    "http_check", "restart_count", "log_pattern",
+}
+VALID_INBOX_STATUS = {"open", "acknowledged", "resolved", "ignored"}
+
+
+def _validate_alert_payload(data: dict) -> tuple[bool, str]:
+    name = (data.get("name") or "").strip()
+    if not name:
+        return False, "name required"
+    kind = (data.get("kind") or "").strip()
+    if kind not in VALID_ALERT_KINDS:
+        return False, f"kind must be one of {sorted(VALID_ALERT_KINDS)}"
+    cond = data.get("condition") or {}
+    if not isinstance(cond, dict):
+        return False, "condition must be a dict"
+    if kind == "log_pattern":
+        if not (cond.get("pattern") or "").strip():
+            return False, "log_pattern requires condition.pattern (regex)"
+        try:
+            re.compile(cond["pattern"])
+        except re.error as e:
+            return False, f"invalid regex: {e}"
+    if kind == "http_check":
+        url = (cond.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return False, "http_check requires condition.url (http(s)://...)"
+    return True, ""
+
+
+@app.post("/settings/alert-webhook")
+async def settings_alert_webhook(request: Request):
+    """Save the global default webhook URL (used as fallback for rules)."""
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    url = (body.get("url") or "").strip()
+    d = get_db()
+    try:
+        db.set_setting(d, "alert_webhook_url", url)
+        d.commit()
+    finally:
+        d.close()
+    return {"ok": True, "url": url}
+
