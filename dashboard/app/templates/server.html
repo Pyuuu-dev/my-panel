@@ -217,6 +217,235 @@
   </div>
 </div>
 
+<!-- Notifikasi Anomali Discord -->
+<div class="card p-5 mt-5" id="anomaly-card">
+  <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center gap-2">
+      <i data-lucide="bell-ring" class="w-4 h-4" style="color:var(--accent)"></i>
+      <h3 class="text-sm font-semibold tracking-tight">Notifikasi Anomali Discord</h3>
+      <span class="badge badge-muted">Server-level</span>
+    </div>
+    <a href="/projects/notifications" class="btn btn-ghost btn-sm" title="Per-project alerts">
+      <i data-lucide="external-link" class="w-3.5 h-3.5"></i> Per-project
+    </a>
+  </div>
+
+  <p class="text-xs mb-4" style="color:var(--text-muted)">
+    Kirim notifikasi ke Discord saat metrik VPS melewati ambang batas. Webhook ini terpisah dari notifikasi per-project.
+  </p>
+
+  <!-- Webhook URL -->
+  <div class="mb-5">
+    <label class="text-[10px] font-mono uppercase tracking-wider block mb-1.5" style="color:var(--text-muted)">Discord Webhook URL</label>
+    <div class="flex gap-2 flex-wrap">
+      <input type="text" id="srv-webhook-url" value="{{ server_webhook }}"
+             placeholder="https://discord.com/api/webhooks/..."
+             class="flex-1 min-w-[280px]"
+             style="padding:8px 10px;background:var(--bg-base);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);font-family:'Geist Mono',ui-monospace,monospace;font-size:12px"/>
+      <button onclick="srvSaveWebhook()" class="btn btn-primary btn-sm">
+        <i data-lucide="save" class="w-3.5 h-3.5"></i> Simpan
+      </button>
+      <button onclick="srvTestWebhook()" class="btn btn-ghost btn-sm">
+        <i data-lucide="send" class="w-3.5 h-3.5"></i> Tes kirim
+      </button>
+    </div>
+    <div id="srv-webhook-status" class="text-[11px] mt-2 font-mono" style="color:var(--text-muted)">
+      {% if global_webhook and not server_webhook %}
+      Belum ada webhook khusus server. Akan jatuh ke webhook global yang sudah diset di /projects/notifications.
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Preset toggles -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-3" id="srv-presets">
+    <!-- CPU -->
+    <div class="srv-preset" data-kind="host_cpu_high">
+      <div class="flex items-start justify-between gap-3 mb-2">
+        <div class="flex items-start gap-2 min-w-0">
+          <i data-lucide="cpu" class="w-4 h-4 mt-0.5" style="color:var(--accent)"></i>
+          <div class="min-w-0">
+            <div class="text-sm font-semibold">CPU tinggi</div>
+            <div class="text-[11px]" style="color:var(--text-muted)">Notif jika CPU host melewati ambang selama beberapa menit.</div>
+          </div>
+        </div>
+        <label class="t-switch">
+          <input type="checkbox" data-toggle="host_cpu_high" {% if host_presets.host_cpu_high.enabled %}checked{% endif %}>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="flex items-center gap-2 text-[11px] flex-wrap" style="color:var(--text-muted)">
+        <span>≥</span>
+        <input type="number" min="1" max="100" step="1" data-cond-key="max_pct"
+               value="{{ host_presets.host_cpu_high.condition.max_pct }}"
+               class="srv-num"/>
+        <span>% selama</span>
+        <input type="number" min="0" max="60" step="1" data-cond-key="for_min"
+               value="{{ host_presets.host_cpu_high.condition.for_min }}"
+               class="srv-num"/>
+        <span>menit</span>
+      </div>
+    </div>
+
+    <!-- Memory -->
+    <div class="srv-preset" data-kind="host_mem_high">
+      <div class="flex items-start justify-between gap-3 mb-2">
+        <div class="flex items-start gap-2 min-w-0">
+          <i data-lucide="memory-stick" class="w-4 h-4 mt-0.5" style="color:#10b981"></i>
+          <div class="min-w-0">
+            <div class="text-sm font-semibold">Memori tinggi</div>
+            <div class="text-[11px]" style="color:var(--text-muted)">Notif jika RAM terpakai melewati ambang.</div>
+          </div>
+        </div>
+        <label class="t-switch">
+          <input type="checkbox" data-toggle="host_mem_high" {% if host_presets.host_mem_high.enabled %}checked{% endif %}>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="flex items-center gap-2 text-[11px] flex-wrap" style="color:var(--text-muted)">
+        <span>≥</span>
+        <input type="number" min="1" max="100" step="1" data-cond-key="max_pct"
+               value="{{ host_presets.host_mem_high.condition.max_pct }}"
+               class="srv-num"/>
+        <span>% terpakai</span>
+      </div>
+    </div>
+
+    <!-- Swap -->
+    <div class="srv-preset" data-kind="host_swap_high">
+      <div class="flex items-start justify-between gap-3 mb-2">
+        <div class="flex items-start gap-2 min-w-0">
+          <i data-lucide="hard-drive-download" class="w-4 h-4 mt-0.5" style="color:#a855f7"></i>
+          <div class="min-w-0">
+            <div class="text-sm font-semibold">Swap tinggi</div>
+            <div class="text-[11px]" style="color:var(--text-muted)">Notif jika swap terpakai melewati ambang.</div>
+          </div>
+        </div>
+        <label class="t-switch">
+          <input type="checkbox" data-toggle="host_swap_high" {% if host_presets.host_swap_high.enabled %}checked{% endif %}>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="flex items-center gap-2 text-[11px] flex-wrap" style="color:var(--text-muted)">
+        <span>≥</span>
+        <input type="number" min="1" max="100" step="1" data-cond-key="max_pct"
+               value="{{ host_presets.host_swap_high.condition.max_pct }}"
+               class="srv-num"/>
+        <span>% terpakai</span>
+      </div>
+    </div>
+
+    <!-- Disk -->
+    <div class="srv-preset" data-kind="host_disk_high">
+      <div class="flex items-start justify-between gap-3 mb-2">
+        <div class="flex items-start gap-2 min-w-0">
+          <i data-lucide="hard-drive" class="w-4 h-4 mt-0.5" style="color:#fbbf24"></i>
+          <div class="min-w-0">
+            <div class="text-sm font-semibold">Disk penuh</div>
+            <div class="text-[11px]" style="color:var(--text-muted)">Notif jika partisi root (/) hampir penuh.</div>
+          </div>
+        </div>
+        <label class="t-switch">
+          <input type="checkbox" data-toggle="host_disk_high" {% if host_presets.host_disk_high.enabled %}checked{% endif %}>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="flex items-center gap-2 text-[11px] flex-wrap" style="color:var(--text-muted)">
+        <span>≥</span>
+        <input type="number" min="1" max="100" step="1" data-cond-key="max_pct"
+               value="{{ host_presets.host_disk_high.condition.max_pct }}"
+               class="srv-num"/>
+        <span>% di /</span>
+      </div>
+    </div>
+
+    <!-- Load -->
+    <div class="srv-preset md:col-span-2" data-kind="host_load_high">
+      <div class="flex items-start justify-between gap-3 mb-2">
+        <div class="flex items-start gap-2 min-w-0">
+          <i data-lucide="activity" class="w-4 h-4 mt-0.5" style="color:#f87171"></i>
+          <div class="min-w-0">
+            <div class="text-sm font-semibold">Load average tinggi</div>
+            <div class="text-[11px]" style="color:var(--text-muted)">Threshold = jumlah core × multiplier. Server kamu punya {{ info.cpu_count }} core, jadi 1.5× = {{ (info.cpu_count * 1.5)|round(2) }}.</div>
+          </div>
+        </div>
+        <label class="t-switch">
+          <input type="checkbox" data-toggle="host_load_high" {% if host_presets.host_load_high.enabled %}checked{% endif %}>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="flex items-center gap-2 text-[11px] flex-wrap" style="color:var(--text-muted)">
+        <span>load1 ≥</span>
+        <input type="number" min="0.1" max="20" step="0.1" data-cond-key="multiplier"
+               value="{{ host_presets.host_load_high.condition.multiplier }}"
+               class="srv-num"/>
+        <span>× core ({{ info.cpu_count }})</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="text-[11px] mt-4 flex items-start gap-1.5" style="color:var(--text-muted)">
+    <i data-lucide="info" class="w-3 h-3 flex-shrink-0 mt-0.5"></i>
+    <span>
+      Cooldown default: 10–60 menit per preset (mencegah spam). Toggle on/off atau ubah angka untuk simpan otomatis.
+    </span>
+  </div>
+</div>
+
+<style>
+.srv-preset {
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.srv-preset:hover { border-color: var(--border-default); }
+.srv-num {
+  width: 60px;
+  padding: 3px 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 11px;
+  text-align: center;
+}
+.srv-num:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-muted);
+}
+.t-switch {
+  position: relative; display: inline-block;
+  width: 38px; height: 20px;
+  cursor: pointer; flex-shrink: 0;
+}
+.t-switch input { opacity: 0; width: 0; height: 0; }
+.t-switch .slider {
+  position: absolute; inset: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  transition: 200ms;
+}
+.t-switch .slider::before {
+  content: ''; position: absolute;
+  width: 14px; height: 14px;
+  left: 2px; top: 2px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: 200ms;
+}
+.t-switch input:checked + .slider {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+}
+.t-switch input:checked + .slider::before {
+  background: var(--accent);
+  transform: translateX(17px);
+}
+</style>
+
 <script>
 // ── State ──
 let isPaused = false;     // manual pause via button
@@ -426,5 +655,102 @@ initProcRowsCache();
 
 setInterval(() => { if (shouldRefresh()) refreshStats(); }, 5000);
 setInterval(() => { if (shouldRefresh()) refreshProcs(false); }, 10000);
+
+// ── Anomaly Alert Panel ──
+function srvSetStatus(text, kind) {
+  const el = document.getElementById('srv-webhook-status');
+  if (!el) return;
+  const colors = { ok: '#34d399', err: '#f87171', info: 'var(--text-muted)' };
+  el.style.color = colors[kind] || colors.info;
+  el.textContent = text;
+}
+
+async function srvSaveWebhook() {
+  const url = document.getElementById('srv-webhook-url').value.trim();
+  srvSetStatus('menyimpan…', 'info');
+  try {
+    const r = await fetch('/server/alert-webhook', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      srvSetStatus('gagal: ' + (j.error || r.statusText), 'err');
+      return;
+    }
+    srvSetStatus(url ? 'tersimpan ✓' : 'webhook dikosongkan ✓', 'ok');
+  } catch (e) {
+    srvSetStatus('error: ' + e.message, 'err');
+  }
+}
+
+async function srvTestWebhook() {
+  const url = document.getElementById('srv-webhook-url').value.trim();
+  srvSetStatus('mengirim tes…', 'info');
+  try {
+    const r = await fetch('/server/alert-webhook/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const j = await r.json();
+    if (j.ok) srvSetStatus('tes terkirim ✓ (cek channel Discord)', 'ok');
+    else srvSetStatus('gagal: ' + (j.message || j.error || ''), 'err');
+  } catch (e) {
+    srvSetStatus('error: ' + e.message, 'err');
+  }
+}
+
+let srvDebounce = {};
+function srvDebouncedSave(kind) {
+  if (srvDebounce[kind]) clearTimeout(srvDebounce[kind]);
+  srvDebounce[kind] = setTimeout(() => srvSavePreset(kind), 500);
+}
+
+async function srvSavePreset(kind) {
+  const card = document.querySelector(`.srv-preset[data-kind="${kind}"]`);
+  if (!card) return;
+  const toggle = card.querySelector('input[type="checkbox"][data-toggle]');
+  const enabled = !!(toggle && toggle.checked);
+  const cond = {};
+  card.querySelectorAll('input[data-cond-key]').forEach(inp => {
+    const k = inp.dataset.condKey;
+    const v = inp.value.trim();
+    if (v === '') return;
+    const n = Number(v);
+    cond[k] = isNaN(n) ? v : n;
+  });
+  try {
+    const r = await fetch('/api/server/alert-preset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind, enabled, condition: cond}),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      srvSetStatus(`${kind}: ${j.error || 'gagal simpan'}`, 'err');
+      // Revert toggle on error
+      if (toggle) toggle.checked = !enabled;
+      return;
+    }
+    srvSetStatus(`${kind}: ${enabled ? 'aktif' : 'nonaktif'} ✓`, 'ok');
+  } catch (e) {
+    srvSetStatus('error: ' + e.message, 'err');
+    if (toggle) toggle.checked = !enabled;
+  }
+}
+
+document.querySelectorAll('.srv-preset').forEach(card => {
+  const kind = card.dataset.kind;
+  const toggle = card.querySelector('input[type="checkbox"][data-toggle]');
+  if (toggle) {
+    toggle.addEventListener('change', () => srvSavePreset(kind));
+  }
+  card.querySelectorAll('input[data-cond-key]').forEach(inp => {
+    inp.addEventListener('change', () => srvDebouncedSave(kind));
+    inp.addEventListener('blur', () => srvDebouncedSave(kind));
+  });
+});
 </script>
 {% endblock %}

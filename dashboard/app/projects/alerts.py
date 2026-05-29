@@ -46,13 +46,34 @@ from .service import get_project_service  # noqa: E402
 
 EVAL_INTERVAL = 30.0           # seconds between rule evaluations
 LOG_SCAN_INTERVAL = 20.0       # seconds between log scans
-DEDUPE_WINDOW = 600            # 10 minutes between duplicate fires per rule
+DEDUPE_WINDOW = 600            # 10 minutes between duplicate fires per rule (default)
 LOG_TAIL_LINES = 80            # lines per project per scan
 DEFAULT_HTTP_TIMEOUT = 6.0
+HOST_SAMPLE_RETENTION = 1800   # keep host CPU samples for 30 minutes
 
 
 # Track per-rule state (last-fire timestamp, rolling-window samples)
 _rule_state: dict[int, dict] = {}
+
+# Rolling window of host CPU samples for host_cpu_high evaluation.
+# Filled by alert_loop() each iteration; trimmed to HOST_SAMPLE_RETENTION.
+_host_cpu_samples: list[tuple[float, float]] = []  # (ts, cpu_pct)
+
+
+def _push_host_cpu_sample(pct: float) -> None:
+    now = time.time()
+    _host_cpu_samples.append((now, float(pct)))
+    cutoff = now - HOST_SAMPLE_RETENTION
+    # Drop expired
+    while _host_cpu_samples and _host_cpu_samples[0][0] < cutoff:
+        _host_cpu_samples.pop(0)
+
+
+def _host_cpu_window(for_min: int) -> list[float]:
+    if for_min <= 0:
+        return [_host_cpu_samples[-1][1]] if _host_cpu_samples else []
+    cutoff = time.time() - for_min * 60
+    return [pct for (ts, pct) in _host_cpu_samples if ts >= cutoff]
 
 
 _LEVEL_RE = re.compile(
@@ -196,6 +217,92 @@ async def _evaluate_rule(rule: dict, snapshot: dict) -> tuple[bool, dict]:
     if kind == "log_pattern":
         return False, snap_meta
 
+    # ── Host-level metrics (project_id is ignored / typically None) ──
+    if kind == "host_cpu_high":
+        max_pct = float(cond.get("max_pct") or 85)
+        for_min = int(cond.get("for_min") or 0)
+        samples = _host_cpu_window(for_min)
+        if not samples:
+            return False, snap_meta
+        if for_min > 0:
+            # Need enough coverage: at least ~half the window
+            min_required = max(2, int((for_min * 60) / EVAL_INTERVAL / 2))
+            if len(samples) < min_required:
+                return False, snap_meta
+            breached = all(p >= max_pct for p in samples)
+        else:
+            breached = samples[-1] >= max_pct
+        avg = sum(samples) / len(samples)
+        snap_meta["cpu_pct"] = round(avg, 1)
+        snap_meta["level"] = "warn"
+        if for_min > 0:
+            snap_meta["detail"] = (f"Host CPU avg {avg:.1f}% over {for_min}min "
+                                   f"(threshold {max_pct}%)")
+        else:
+            snap_meta["detail"] = f"Host CPU {avg:.1f}% (threshold {max_pct}%)"
+        return breached, snap_meta
+
+    if kind == "host_mem_high":
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+        except Exception:
+            return False, snap_meta
+        max_pct = float(cond.get("max_pct") or 90)
+        snap_meta["mem_pct"] = mem.percent
+        snap_meta["level"] = "warn"
+        snap_meta["detail"] = (f"Host RAM {mem.percent:.1f}% used "
+                               f"({mem.used/1024**3:.1f}/{mem.total/1024**3:.1f} GB · "
+                               f"threshold {max_pct}%)")
+        return mem.percent >= max_pct, snap_meta
+
+    if kind == "host_swap_high":
+        try:
+            import psutil
+            sw = psutil.swap_memory()
+        except Exception:
+            return False, snap_meta
+        max_pct = float(cond.get("max_pct") or 50)
+        snap_meta["swap_pct"] = sw.percent
+        snap_meta["level"] = "warn"
+        if sw.total <= 0:
+            return False, snap_meta
+        snap_meta["detail"] = (f"Host swap {sw.percent:.1f}% used "
+                               f"({sw.used/1024**3:.2f}/{sw.total/1024**3:.2f} GB · "
+                               f"threshold {max_pct}%)")
+        return sw.percent >= max_pct, snap_meta
+
+    if kind == "host_disk_high":
+        try:
+            import psutil
+            path = (cond.get("path") or "/").strip() or "/"
+            du = psutil.disk_usage(path)
+        except Exception:
+            return False, snap_meta
+        max_pct = float(cond.get("max_pct") or 90)
+        snap_meta["disk_pct"] = du.percent
+        snap_meta["level"] = "error" if du.percent >= 95 else "warn"
+        snap_meta["detail"] = (f"Disk {path} {du.percent:.1f}% used "
+                               f"({du.used/1024**3:.1f}/{du.total/1024**3:.1f} GB · "
+                               f"threshold {max_pct}%)")
+        return du.percent >= max_pct, snap_meta
+
+    if kind == "host_load_high":
+        try:
+            import os as _os
+            import psutil
+            load1, _l5, _l15 = _os.getloadavg()
+            cores = psutil.cpu_count() or 1
+        except Exception:
+            return False, snap_meta
+        multiplier = float(cond.get("multiplier") or 1.5)
+        threshold = cores * multiplier
+        snap_meta["load1"] = round(load1, 2)
+        snap_meta["level"] = "warn"
+        snap_meta["detail"] = (f"Load1 {load1:.2f} on {cores} cores "
+                               f"(threshold {multiplier}× = {threshold:.2f})")
+        return load1 >= threshold, snap_meta
+
     return False, snap_meta
 
 
@@ -203,8 +310,21 @@ async def _evaluate_rule(rule: dict, snapshot: dict) -> tuple[bool, dict]:
 async def alert_loop() -> None:
     svc = get_project_service()
     await asyncio.sleep(15)  # give app time to settle
+    # Prime psutil.cpu_percent so subsequent calls return delta-based values
+    try:
+        import psutil
+        psutil.cpu_percent(interval=None)
+    except Exception:
+        pass
     while True:
         try:
+            # Sample host CPU each loop iteration for rolling-window evaluators
+            try:
+                import psutil
+                _push_host_cpu_sample(psutil.cpu_percent(interval=None))
+            except Exception:
+                pass
+
             d = shared_db.get_db()
             try:
                 rules = shared_db.list_alert_rules(d, only_enabled=True)
@@ -221,10 +341,14 @@ async def alert_loop() -> None:
                         continue
                     if not fires:
                         continue
-                    # Dedupe
+                    # Per-rule cooldown (cond.cooldown_min wins, else default)
+                    cond = rule.get("condition") or {}
+                    cooldown = int(cond.get("cooldown_min") or 0) * 60
+                    if cooldown <= 0:
+                        cooldown = DEDUPE_WINDOW
                     last = _rule_state.get(rid, {}).get("last_fired", 0)
                     now = time.time()
-                    if now - last < DEDUPE_WINDOW:
+                    if now - last < cooldown:
                         continue
                     await _fire(rule, snap_meta)
                     _rule_state.setdefault(rid, {})["last_fired"] = now
@@ -247,7 +371,22 @@ async def _fire(rule: dict, snapshot_meta: dict) -> None:
             project = shared_db.get_project_by_id(d, rule["project_id"])
         finally:
             d.close()
-    ok, msg = await dispatch(rule, project, snapshot_meta)
+
+    # For host-level rules, prefer the server-specific webhook URL if rule
+    # itself has none configured. dispatch() already falls back to the
+    # global alert_webhook_url after that.
+    override_url = None
+    kind = (rule.get("kind") or "").lower()
+    if kind.startswith("host_") and not (rule.get("webhook_url") or "").strip():
+        d = shared_db.get_db()
+        try:
+            override_url = (shared_db.get_setting(
+                d, "server_alert_webhook_url", "") or "").strip() or None
+        finally:
+            d.close()
+
+    ok, msg = await dispatch(rule, project, snapshot_meta,
+                             override_url=override_url)
 
     # Persist fire
     d = shared_db.get_db()
