@@ -2429,9 +2429,37 @@ async def server_monitor(request: Request):
     user = get_user(request)
     if not user: return RedirectResponse("/login", 302)
     info = get_server_info()
+    d = get_db()
+    try:
+        rules = db.list_alert_rules(d)
+        server_webhook = db.get_setting(d, "server_alert_webhook_url", "") or ""
+        global_webhook = db.get_setting(d, "alert_webhook_url", "") or ""
+    finally:
+        d.close()
+    host_presets: dict = {}
+    for kind in HOST_PRESET_KINDS:
+        r = _find_host_preset_rule(rules, kind)
+        defaults = HOST_PRESET_DEFAULTS[kind]
+        if r:
+            try:
+                cond = json.loads(r.get("condition") or "{}")
+            except Exception:
+                cond = {}
+            host_presets[kind] = {
+                "enabled": bool(r.get("enabled")),
+                "condition": {**defaults, **cond},
+            }
+        else:
+            host_presets[kind] = {
+                "enabled": False,
+                "condition": dict(defaults),
+            }
     return tpl.TemplateResponse(request, "server.html", context={
         "user": user, "page": "server", "services": get_all_services(),
         "info": info,
+        "server_webhook": server_webhook,
+        "global_webhook": global_webhook,
+        "host_presets": host_presets,
     })
 
 
@@ -3929,7 +3957,9 @@ async def _api_alert_rule_create_early(request: Request):
     ok, err = _validate_alert_payload(body) if "_validate_alert_payload" in globals() else (True, "")
     # _validate_alert_payload is defined later — use inline copy
     valid_kinds = {"rss_high", "cpu_high", "state_not", "port_down",
-                   "http_check", "restart_count", "log_pattern"}
+                   "http_check", "restart_count", "log_pattern",
+                   "host_cpu_high", "host_mem_high", "host_swap_high",
+                   "host_disk_high", "host_load_high"}
     name = (body.get("name") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "name required"}, 400)
@@ -4710,6 +4740,8 @@ async def api_project_log_tail(request: Request, slug: str,
 VALID_ALERT_KINDS = {
     "rss_high", "cpu_high", "state_not", "port_down",
     "http_check", "restart_count", "log_pattern",
+    "host_cpu_high", "host_mem_high", "host_swap_high",
+    "host_disk_high", "host_load_high",
 }
 VALID_INBOX_STATUS = {"open", "acknowledged", "resolved", "ignored"}
 
@@ -4735,6 +4767,21 @@ def _validate_alert_payload(data: dict) -> tuple[bool, str]:
         url = (cond.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return False, "http_check requires condition.url (http(s)://...)"
+    if kind in ("host_cpu_high", "host_mem_high", "host_swap_high",
+                "host_disk_high"):
+        try:
+            mp = float(cond.get("max_pct"))
+        except Exception:
+            return False, f"{kind} requires numeric condition.max_pct"
+        if not (1 <= mp <= 100):
+            return False, "max_pct must be between 1 and 100"
+    if kind == "host_load_high":
+        try:
+            m = float(cond.get("multiplier"))
+        except Exception:
+            return False, "host_load_high requires numeric condition.multiplier"
+        if not (0.1 <= m <= 20):
+            return False, "multiplier must be between 0.1 and 20"
     return True, ""
 
 
@@ -4756,4 +4803,224 @@ async def settings_alert_webhook(request: Request):
     finally:
         d.close()
     return {"ok": True, "url": url}
+
+
+# ── Server (host-level) Anomaly Alert Routes ────────────
+HOST_PRESET_KINDS = {
+    "host_cpu_high", "host_mem_high", "host_swap_high",
+    "host_disk_high", "host_load_high",
+}
+HOST_PRESET_DEFAULTS = {
+    "host_cpu_high":  {"max_pct": 85, "for_min": 5, "cooldown_min": 15},
+    "host_mem_high":  {"max_pct": 90, "cooldown_min": 15},
+    "host_swap_high": {"max_pct": 50, "cooldown_min": 30},
+    "host_disk_high": {"max_pct": 90, "path": "/", "cooldown_min": 60},
+    "host_load_high": {"multiplier": 1.5, "cooldown_min": 10},
+}
+HOST_PRESET_NAMES = {
+    "host_cpu_high":  "Auto Server: CPU tinggi",
+    "host_mem_high":  "Auto Server: Memori tinggi",
+    "host_swap_high": "Auto Server: Swap tinggi",
+    "host_disk_high": "Auto Server: Disk penuh",
+    "host_load_high": "Auto Server: Load tinggi",
+}
+
+
+def _find_host_preset_rule(rules: list, kind: str) -> dict | None:
+    name = HOST_PRESET_NAMES.get(kind, "")
+    for r in rules:
+        if (r.get("name") or "") == name and (r.get("kind") or "") == kind:
+            return r
+    return None
+
+
+@app.get("/api/server/alert-state")
+async def api_server_alert_state(request: Request):
+    """Return current state of host-level presets + server webhook URL."""
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    d = get_db()
+    try:
+        rules = db.list_alert_rules(d)
+        webhook = db.get_setting(d, "server_alert_webhook_url", "") or ""
+        global_webhook = db.get_setting(d, "alert_webhook_url", "") or ""
+    finally:
+        d.close()
+    presets: dict[str, dict] = {}
+    for kind in HOST_PRESET_KINDS:
+        r = _find_host_preset_rule(rules, kind)
+        defaults = HOST_PRESET_DEFAULTS[kind]
+        if r:
+            try:
+                cond = json.loads(r.get("condition") or "{}")
+            except Exception:
+                cond = {}
+            presets[kind] = {
+                "enabled": bool(r.get("enabled")),
+                "condition": {**defaults, **cond},
+                "rule_id": r.get("id"),
+                "last_fired_at": r.get("last_fired_at"),
+                "fire_count": r.get("fire_count") or 0,
+            }
+        else:
+            presets[kind] = {
+                "enabled": False,
+                "condition": dict(defaults),
+                "rule_id": None,
+                "last_fired_at": None,
+                "fire_count": 0,
+            }
+    return {
+        "presets": presets,
+        "webhook_url": webhook,
+        "global_webhook_url": global_webhook,
+    }
+
+
+@app.post("/api/server/alert-preset")
+async def api_server_alert_preset(request: Request):
+    """Toggle/update a host-level alert preset.
+
+    Body: {
+      "kind": "host_cpu_high|host_mem_high|host_swap_high|host_disk_high|host_load_high",
+      "enabled": bool,
+      "condition": {...}   # optional, merged with defaults
+    }
+    """
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    kind = (body.get("kind") or "").strip()
+    if kind not in HOST_PRESET_KINDS:
+        return JSONResponse(
+            {"ok": False, "error": f"kind must be one of {sorted(HOST_PRESET_KINDS)}"},
+            400,
+        )
+    enabled = bool(body.get("enabled"))
+    user_cond = body.get("condition") or {}
+    if not isinstance(user_cond, dict):
+        return JSONResponse({"ok": False, "error": "condition must be a dict"}, 400)
+
+    # Merge defaults + user-supplied
+    cond = {**HOST_PRESET_DEFAULTS[kind], **user_cond}
+
+    # Validate numerics
+    if kind in ("host_cpu_high", "host_mem_high", "host_swap_high",
+                "host_disk_high"):
+        try:
+            mp = float(cond.get("max_pct"))
+        except Exception:
+            return JSONResponse({"ok": False, "error": "max_pct must be numeric"}, 400)
+        if not (1 <= mp <= 100):
+            return JSONResponse({"ok": False, "error": "max_pct must be 1..100"}, 400)
+        cond["max_pct"] = mp
+    if kind == "host_cpu_high":
+        try:
+            cond["for_min"] = max(0, int(cond.get("for_min") or 0))
+        except Exception:
+            cond["for_min"] = 0
+    if kind == "host_load_high":
+        try:
+            m = float(cond.get("multiplier"))
+        except Exception:
+            return JSONResponse({"ok": False, "error": "multiplier must be numeric"}, 400)
+        if not (0.1 <= m <= 20):
+            return JSONResponse({"ok": False, "error": "multiplier must be 0.1..20"}, 400)
+        cond["multiplier"] = m
+    try:
+        cond["cooldown_min"] = max(0, int(cond.get("cooldown_min") or 0))
+    except Exception:
+        cond["cooldown_min"] = 0
+
+    name = HOST_PRESET_NAMES[kind]
+
+    d = get_db()
+    try:
+        rules = db.list_alert_rules(d)
+        existing = _find_host_preset_rule(rules, kind)
+        payload = {
+            "name": name,
+            "kind": kind,
+            "condition": cond,
+            "project_id": None,
+            "enabled": enabled,
+        }
+        if existing:
+            payload["id"] = existing["id"]
+        rule_id = db.upsert_alert_rule(d, payload)
+        d.commit()
+    finally:
+        d.close()
+    return {"ok": True, "kind": kind, "enabled": enabled,
+            "condition": cond, "rule_id": rule_id}
+
+
+@app.post("/server/alert-webhook")
+async def server_alert_webhook_save(request: Request):
+    """Save the dedicated server-anomaly Discord webhook URL."""
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, 400)
+    url = (body.get("url") or "").strip()
+    d = get_db()
+    try:
+        db.set_setting(d, "server_alert_webhook_url", url)
+        d.commit()
+    finally:
+        d.close()
+    return {"ok": True, "url": url}
+
+
+@app.post("/server/alert-webhook/test")
+async def server_alert_webhook_test(request: Request):
+    """Send a test message to the server-anomaly webhook."""
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    url = (body.get("url") or "").strip()
+    if not url:
+        d = get_db()
+        try:
+            url = (db.get_setting(d, "server_alert_webhook_url", "") or "").strip()
+            if not url:
+                url = (db.get_setting(d, "alert_webhook_url", "") or "").strip()
+        finally:
+            d.close()
+    if not url:
+        return JSONResponse({"ok": False, "error": "no webhook url"}, 400)
+    from app.projects.dispatcher import dispatch
+    fake_rule = {"name": "Tes Notifikasi Anomali Server", "kind": "host_cpu_high"}
+    fake_project = {"slug": "host", "name": "VPS Host"}
+    try:
+        mem = psutil.virtual_memory()
+        sw = psutil.swap_memory()
+        du = psutil.disk_usage("/")
+        load1, _l5, _l15 = os.getloadavg()
+        snap = {
+            "level": "info",
+            "detail": "Notifikasi tes berhasil. Jika kamu melihat pesan ini, webhook server alert sudah terkonfigurasi dengan benar.",
+            "cpu_pct": psutil.cpu_percent(interval=0.2),
+            "mem_pct": mem.percent,
+            "swap_pct": sw.percent,
+            "disk_pct": round(du.percent, 1),
+            "load1": round(load1, 2),
+        }
+    except Exception:
+        snap = {"level": "info", "detail": "Webhook test message."}
+    ok, msg = await dispatch(fake_rule, fake_project, snap, override_url=url)
+    return {"ok": ok, "message": msg}
+
 

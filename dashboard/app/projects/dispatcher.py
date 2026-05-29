@@ -29,8 +29,13 @@ def _format_discord(rule: dict, project: dict, snapshot: dict) -> dict:
     """Render a Discord embed payload."""
     name = rule.get("name") or "Alert"
     kind = rule.get("kind") or "rule"
-    pname = project.get("name") if project else "system"
+    is_host = kind.startswith("host_")
+    pname = project.get("name") if project else None
     pslug = project.get("slug") if project else ""
+    if is_host and not pname:
+        pname = "VPS Host"
+    elif not pname:
+        pname = "system"
     color_map = {
         "critical": 0xEF4444,
         "error": 0xEF4444,
@@ -40,12 +45,21 @@ def _format_discord(rule: dict, project: dict, snapshot: dict) -> dict:
     }
     level = (snapshot.get("level") or "warn").lower()
     color = color_map.get(level, 0x06B6D4)
+    title_icon = "🚨" if level in ("error", "critical") else "⚠"
     fields = []
     state = snapshot.get("state")
     if state:
         fields.append({"name": "State", "value": str(state), "inline": True})
     if snapshot.get("cpu_pct") is not None:
         fields.append({"name": "CPU", "value": f"{snapshot.get('cpu_pct')}%", "inline": True})
+    if snapshot.get("mem_pct") is not None:
+        fields.append({"name": "Memory", "value": f"{snapshot.get('mem_pct')}%", "inline": True})
+    if snapshot.get("swap_pct") is not None:
+        fields.append({"name": "Swap", "value": f"{snapshot.get('swap_pct')}%", "inline": True})
+    if snapshot.get("disk_pct") is not None:
+        fields.append({"name": "Disk", "value": f"{snapshot.get('disk_pct')}%", "inline": True})
+    if snapshot.get("load1") is not None:
+        fields.append({"name": "Load1", "value": f"{snapshot.get('load1')}", "inline": True})
     if snapshot.get("rss_mb") is not None:
         fields.append({"name": "RSS", "value": f"{snapshot.get('rss_mb')} MB", "inline": True})
     if snapshot.get("uptime_str"):
@@ -55,13 +69,14 @@ def _format_discord(rule: dict, project: dict, snapshot: dict) -> dict:
     if snapshot.get("port"):
         fields.append({"name": "Port", "value": f":{snapshot.get('port')}", "inline": True})
     detail = snapshot.get("detail") or snapshot.get("description") or ""
+    footer_text = f"{pname} · {pslug}" if pslug else pname
     return {
         "embeds": [{
-            "title": f"⚠ {name}",
+            "title": f"{title_icon} {name}",
             "description": detail[:1000] if detail else f"Triggered: {kind}",
             "color": color,
             "fields": fields,
-            "footer": {"text": f"{pname} · {pslug}" if pname else "system"},
+            "footer": {"text": footer_text},
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }],
     }
@@ -79,7 +94,8 @@ def _format_text(rule: dict, project: dict, snapshot: dict) -> str:
         f"<i>{pname}</i> · <code>{pslug}</code>",
         f"kind: {kind}",
     ]
-    for k in ("state", "cpu_pct", "rss_mb", "uptime_str", "error_count", "port"):
+    for k in ("state", "cpu_pct", "mem_pct", "swap_pct", "disk_pct",
+              "load1", "rss_mb", "uptime_str", "error_count", "port"):
         if snapshot.get(k) is not None and snapshot.get(k) != "":
             parts.append(f"{k}: {snapshot.get(k)}")
     if detail:
