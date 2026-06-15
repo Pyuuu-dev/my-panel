@@ -1552,6 +1552,64 @@ async def api_download_chapter(request: Request):
     except Exception as e:
         return JSONResponse({"error": f"Webhook failed: {str(e)[:100]}"}, 500)
 
+# ── Image Proxy (bypass hotlink protection) ─────────────
+_PROXY_ALLOWED_DOMAINS = {
+    "img.komiku.org",
+    "thumbnail.komiku.org",
+    "update.komikid.org",
+}
+
+@app.get("/api/image-proxy")
+async def image_proxy(request: Request):
+    """Proxy images from manga CDNs that enforce Referer-based hotlink protection.
+
+    Fetches the image server-side with the correct Referer header and streams
+    it back to the browser. Prevents 403 errors when the browser's own Referer
+    (panel.ldctesting.my.id) is rejected by the CDN.
+    """
+    user = get_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, 401)
+
+    img_url = request.query_params.get("url", "")
+    if not img_url:
+        return JSONResponse({"error": "url parameter required"}, 400)
+
+    # Security: only allow known manga image domains (prevent open-proxy abuse)
+    from urllib.parse import urlparse
+    parsed = urlparse(img_url)
+    if parsed.hostname not in _PROXY_ALLOWED_DOMAINS:
+        return JSONResponse({"error": f"domain not allowed: {parsed.hostname}"}, 403)
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://komiku.org/",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+        ) as client:
+            resp = await client.get(img_url)
+            if resp.status_code != 200:
+                return JSONResponse({"error": f"upstream returned {resp.status_code}"}, 502)
+
+            content_type = resp.headers.get("content-type", "image/jpeg")
+            # Stream the image back with caching headers
+            return Response(
+                content=resp.content,
+                media_type=content_type,
+                headers={
+                    "Cache-Control": "public, max-age=86400",  # cache 24h in browser
+                    "X-Proxy": "image-proxy",
+                },
+            )
+    except httpx.TimeoutException:
+        return JSONResponse({"error": "upstream timeout"}, 504)
+    except Exception as e:
+        return JSONResponse({"error": f"proxy error: {str(e)[:100]}"}, 502)
+
 # ── Bookmarks Page ──────────────────────────────────────
 @app.get("/bookmarks", response_class=HTMLResponse)
 async def bookmarks_page(request: Request):
@@ -4125,12 +4183,13 @@ async def _api_audit_list_early(request: Request, project_slug: str = "",
 
 @app.get("/api/projects/history", name="api_history_merged")
 async def api_projects_history(request: Request,
-                               since_days: int = 7,
+                               since_days: int = 30,
                                project_slug: str = "",
                                limit: int = 300):
     """Gabungan riwayat: project_actions (siapa-melakukan-apa) +
-    project_events (status transitions, sistem). Sudah disortir menurun
-    waktu, siap dipakai langsung oleh halaman /projects/history.
+    project_events (status transitions, sistem) + read_status (baca komik).
+    Sudah disortir menurun waktu, siap dipakai langsung oleh halaman
+    /projects/history.
     """
     user = get_user(request)
     if not user:
@@ -4144,6 +4203,15 @@ async def api_projects_history(request: Request,
         # project_events tidak punya filter slug langsung, ambil banyak lalu
         # filter di python
         events = db.list_project_events(d, project_id=None, limit=limit)
+        # Baca komik — dari read_status JOIN chapters + komik
+        reads = d.execute("""
+            SELECT r.read_at AS ts, k.title AS komik_title,
+                   c.text AS chapter_text, c.url AS chapter_url
+            FROM read_status r
+            JOIN chapters c ON r.chapter_id = c.id
+            LEFT JOIN komik k ON c.komik_id = k.id
+            ORDER BY r.id DESC LIMIT ?
+        """, (limit,)).fetchall()
     finally:
         d.close()
 
@@ -4174,6 +4242,21 @@ async def api_projects_history(request: Request,
             "result": "",
             "duration_ms": 0,
             "level": e.get("level") or "info",
+        })
+    for rd in reads:
+        rd_slug = rd["chapter_url"] or ""
+        if project_slug and project_slug != "komiku-scraper":
+            continue
+        merged.append({
+            "type": "read",
+            "ts": rd["ts"] or "",
+            "actor": user,
+            "project_slug": "komiku-scraper",
+            "title": f"membaca {(rd['komik_title'] or 'Komik')} — {rd['chapter_text'] or ''}",
+            "detail": rd_slug,
+            "result": "",
+            "duration_ms": 0,
+            "level": "info",
         })
 
     # Filter umur

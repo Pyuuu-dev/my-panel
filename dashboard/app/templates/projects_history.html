@@ -133,7 +133,7 @@
   <div>
     <h1>Riwayat</h1>
     <p class="summary">
-      <span id="hist-count">0</span> kejadian · <span id="hist-since">7 hari terakhir</span>
+      <span id="hist-count">0</span> kejadian · <span id="hist-since">30 hari terakhir</span>
     </p>
   </div>
   <div class="flex gap-2 flex-wrap">
@@ -148,8 +148,8 @@
     <span class="text-xs" style="color:var(--text-muted)">Tampilkan:</span>
     <select id="f-since" onchange="loadHistory()">
       <option value="1">Hari ini</option>
-      <option value="7" selected>7 hari terakhir</option>
-      <option value="30">30 hari terakhir</option>
+      <option value="7">7 hari terakhir</option>
+      <option value="30" selected>30 hari terakhir</option>
       <option value="365">Semua</option>
     </select>
     <select id="f-project" onchange="loadHistory()">
@@ -198,6 +198,9 @@ function dateLabel(ts) {
 
 function iconFor(item) {
   // Pilih ikon + warna berdasar tipe & level
+  if (item.type === 'read') {
+    return ['book-open', 'ok'];
+  }
   if (item.type === 'action') {
     const a = (item.title || '').toLowerCase();
     if (a.includes('memulai'))      return ['play', 'ok'];
@@ -221,6 +224,9 @@ function iconFor(item) {
 }
 
 function metaCellFor(item) {
+  if (item.type === 'read') {
+    return `<span class="badge ok">dibaca</span>`;
+  }
   if (item.type === 'action') {
     const r = (item.result || '').toLowerCase();
     const dur = item.duration_ms ? `${item.duration_ms} ms` : '';
