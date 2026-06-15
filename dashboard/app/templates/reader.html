@@ -73,7 +73,7 @@
 <!-- Reader -->
 <div class="reader-wrap">
   {% for img in images %}
-  <img src="{{ img }}" alt="Page {{ loop.index }}" class="reader-img" loading="lazy" onerror="this.style.opacity='0.3';this.alt='Failed to load'">
+  <img src="/api/image-proxy?url={{ img|urlencode }}" alt="Page {{ loop.index }}" class="reader-img" loading="lazy" onerror="this.style.opacity='0.3';this.alt='Failed to load'">
   {% endfor %}
 </div>
 
