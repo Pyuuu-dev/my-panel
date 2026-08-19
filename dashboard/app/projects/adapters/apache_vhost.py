@@ -35,17 +35,17 @@ SYSTEMCTL = shutil.which("systemctl") or "/bin/systemctl"
 
 
 def _apache_reload() -> tuple[int, str]:
-    """Reload apache via systemctl (respects unit's PrivateTmp + namespaces).
+    """Restart apache via systemctl.
 
-    Calling `apachectl -k graceful` directly from a non-systemd-managed
-    process (like the dashboard) bypasses the unit's namespace settings
-    and can crash apache (status 226/NAMESPACE). `systemctl reload` is
-    the supported path.
+    `systemctl reload` fails with status 226/NAMESPACE on this host because
+    PrivateTmp=true causes a mount namespace setup error when the reload is
+    triggered from outside systemd's own context. `systemctl restart` avoids
+    the namespace issue entirely and is reliably supported.
     """
     try:
         r = subprocess.run(
-            [SYSTEMCTL, "reload", "apache2"],
-            capture_output=True, text=True, timeout=15,
+            [SYSTEMCTL, "restart", "apache2"],
+            capture_output=True, text=True, timeout=30,
         )
         return r.returncode, (r.stderr or r.stdout or "").strip()
     except (subprocess.TimeoutExpired, OSError) as e:
