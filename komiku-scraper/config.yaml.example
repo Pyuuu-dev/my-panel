@@ -21,6 +21,6 @@ scraper:
     like Gecko) Chrome/120.0.0.0 Safari/537.36
 watchlist: []
 webhook:
-  discord_url: https://discord.com/api/webhooks/REDACTED-ROTATED-WEBHOOK
+  discord_url: "https://discord.com/api/webhooks/REPLACE_ME"
   enabled: true
   notify_mode: bookmark

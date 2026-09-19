@@ -10,6 +10,7 @@ metric query.
 """
 from __future__ import annotations
 
+import os
 import time
 import xmlrpc.client
 from typing import Optional
@@ -18,8 +19,12 @@ import psutil
 
 from .base import AdapterError, AdapterStatus, ActionResult, BaseAdapter
 
-# Default URL — same as main.py. Made overridable for tests.
-DEFAULT_RPC_URL = "http://127.0.0.1:9001/RPC2"
+# Credentials come from the environment (/opt/services/.env), never hardcoded.
+# Falls back to an unauthenticated local URL so tests can still construct the
+# adapter; real calls will simply fail rather than ship a working password.
+DEFAULT_RPC_URL = os.environ.get(
+    "SUPERVISOR_URL", "http://127.0.0.1:9001/RPC2"
+)
 
 
 # ── Light wrapper around the RPC proxy with reuse + reconnect ────

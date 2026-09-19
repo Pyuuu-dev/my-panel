@@ -34,10 +34,31 @@ import db
 from db import get_db, init_db, log_uptime
 
 # ── Config ──────────────────────────────────────────────
-SECRET_KEY = "REDACTED-ROTATED-SECRET"
+# Secrets live in /opt/services/.env (chmod 600, git-ignored) so they never
+# end up in the repository. Loaded here before any of them are read.
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv("/opt/services/.env")
+
+
+def _require_env(name: str) -> str:
+    """Read a required secret, failing loudly instead of falling back.
+
+    A silent default would let the service boot with a well-known value and
+    silently accept forged sessions, so startup aborts instead.
+    """
+    val = os.environ.get(name, "").strip()
+    if not val:
+        raise RuntimeError(
+            f"{name} is not set. Define it in /opt/services/.env "
+            f"(see .env.example) before starting the panel."
+        )
+    return val
+
+
+SECRET_KEY = _require_env("SECRET_KEY")
 LOGS_DIR = Path("/opt/services/logs")
 SERVICES_DIR = Path("/opt/services")
-SUPERVISOR_URL = "http://127.0.0.1:9001/RPC2"
+SUPERVISOR_URL = _require_env("SUPERVISOR_URL")
 
 SERVICES = {
     "komiku-scraper": {
@@ -813,8 +834,15 @@ tpl.TemplateResponse = _patched_template_response
 async def rate_limit_middleware(request: Request, call_next):
     ip = request.client.host if request.client else "unknown"
     path = request.url.path
+    # Image proxy: a single chapter fans out to ~100 image requests, which the
+    # 60/min public bucket rejected with 429 (pages showed "Failed to load").
+    # The endpoint authenticates each request itself, so it gets its own
+    # higher-ceiling bucket instead of sharing the public API budget.
+    if path == "/api/image-proxy":
+        if not check_rate_limit(f"img:{ip}", 600, 60):
+            return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
     # Public API: 60/min, authenticated: 200/min
-    if path.startswith("/api/") or path.startswith("/feed/"):
+    elif path.startswith("/api/") or path.startswith("/feed/"):
         if not check_rate_limit(f"pub:{ip}", 60, 60):
             return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
     else:
@@ -1373,6 +1401,45 @@ async def api_komik_detail(komik_id: int):
     finally:
         db.close()
 
+# ── Chapter image extraction (shared) ───────────────────
+_CHAPTER_IMG_SELECTOR = (
+    "#Baca_Komik img, .chapter_img img, .reading-content img, "
+    ".main-reading-area img, img.size-full"
+)
+
+# Non-page assets that sit inside the reading container (house ads/banners).
+_CHAPTER_IMG_SKIP = ("komiku-promosi",)
+
+_CHAPTER_IMG_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def extract_chapter_images(soup) -> list:
+    """Collect chapter page images from a parsed chapter document.
+
+    Shared by the reader and the Discord sender so both stay in sync.
+    Only parsing lives here; each caller keeps its own fetch behaviour.
+
+    Filters out promo banners and de-duplicates while preserving page order.
+    """
+    images = []
+    seen = set()
+    for img in soup.select(_CHAPTER_IMG_SELECTOR):
+        src = (img.get("src") or "") or (img.get("data-src") or "")
+        src = src.strip()
+        if not src.startswith("http"):
+            continue
+        low = src.lower()
+        if not any(ext in low for ext in _CHAPTER_IMG_EXT):
+            continue
+        if any(skip in low for skip in _CHAPTER_IMG_SKIP):
+            continue
+        if src in seen:
+            continue
+        seen.add(src)
+        images.append(src)
+    return images
+
+
 # ── Chapter Reader (on-demand image scrape) ─────────────
 @app.get("/read", response_class=HTMLResponse)
 async def read_chapter(request: Request):
@@ -1399,10 +1466,7 @@ async def read_chapter(request: Request):
         title_el = soup.select_one("title")
         title_text = title_el.get_text(strip=True) if title_el else "Chapter"
 
-        for img in soup.select("#Baca_Komik img, .chapter_img img, .reading-content img, .main-reading-area img, img.size-full"):
-            src = img.get("src", "") or img.get("data-src", "")
-            if src and src.startswith("http") and any(ext in src.lower() for ext in (".jpg", ".png", ".webp", ".jpeg", ".gif")):
-                images.append(src)
+        images = extract_chapter_images(soup)
     except Exception as e:
         error = str(e)
 
@@ -1499,11 +1563,7 @@ async def api_download_chapter(request: Request):
         return JSONResponse({"error": f"Failed to fetch: {e}"}, 500)
 
     soup = BeautifulSoup(html, "html.parser")
-    images = []
-    for img in soup.select("#Baca_Komik img, .chapter_img img, .reading-content img, .main-reading-area img, img.size-full"):
-        src = img.get("src", "") or img.get("data-src", "")
-        if src and src.startswith("http") and any(ext in src.lower() for ext in (".jpg", ".png", ".webp", ".jpeg")):
-            images.append(src)
+    images = extract_chapter_images(soup)
 
     if not images:
         return JSONResponse({"error": "No images found", "url": chapter_url}, 400)
@@ -1553,11 +1613,31 @@ async def api_download_chapter(request: Request):
         return JSONResponse({"error": f"Webhook failed: {str(e)[:100]}"}, 500)
 
 # ── Image Proxy (bypass hotlink protection) ─────────────
-_PROXY_ALLOWED_DOMAINS = {
-    "img.komiku.org",
-    "thumbnail.komiku.org",
-    "update.komikid.org",
+_PROXY_ALLOWED_BASE = {
+    "komiku.org",
+    "komiku.to",
+    "komikid.org",
 }
+
+
+def _proxy_host_allowed(hostname: str) -> bool:
+    """Allow a base domain and any of its subdomains.
+
+    Komiku shards chapter images across many hosts (img.komiku.org,
+    image2..imageN.komiku.to). Matching on the registrable base domain keeps
+    new shards working without code changes.
+
+    Matching is done on a dot boundary so lookalike domains such as
+    "evilkomiku.to" are rejected instead of slipping through a naive
+    endswith() check (which would turn this into an open proxy).
+    """
+    if not hostname:
+        return False
+    host = hostname.lower().rstrip(".")
+    for base in _PROXY_ALLOWED_BASE:
+        if host == base or host.endswith("." + base):
+            return True
+    return False
 
 @app.get("/api/image-proxy")
 async def image_proxy(request: Request):
@@ -1578,32 +1658,68 @@ async def image_proxy(request: Request):
     # Security: only allow known manga image domains (prevent open-proxy abuse)
     from urllib.parse import urlparse
     parsed = urlparse(img_url)
-    if parsed.hostname not in _PROXY_ALLOWED_DOMAINS:
+    if parsed.scheme not in ("http", "https"):
+        return JSONResponse({"error": "invalid scheme"}, 400)
+    if not _proxy_host_allowed(parsed.hostname):
         return JSONResponse({"error": f"domain not allowed: {parsed.hostname}"}, 403)
 
     import httpx
+    origin = f"{parsed.scheme}://{parsed.netloc}"
     try:
         async with httpx.AsyncClient(
-            timeout=15,
+            # Split connect/read: the reader lazy-loads dozens of images at
+            # once, and a single flat timeout caused intermittent 504s.
+            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=30.0),
+            # Redirects are followed manually so every hop can be re-checked
+            # against the allowlist; auto-following would let an allowed host
+            # redirect to an arbitrary domain and bypass the check entirely.
+            follow_redirects=False,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "https://komiku.org/",
+                # Derive Referer from the image host itself instead of
+                # hardcoding komiku.org, so other shards/CDNs keep working.
+                "Referer": origin + "/",
                 "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             },
         ) as client:
-            resp = await client.get(img_url)
-            if resp.status_code != 200:
-                return JSONResponse({"error": f"upstream returned {resp.status_code}"}, 502)
+            current = img_url
+            resp = None
+            for _ in range(4):  # cap redirect chain
+                resp = await client.get(current)
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = resp.headers.get("location", "")
+                if not location:
+                    break
+                current = str(httpx.URL(current).join(location))
+                hop = urlparse(current)
+                if hop.scheme not in ("http", "https") or not _proxy_host_allowed(hop.hostname):
+                    return JSONResponse(
+                        {"error": f"redirect to disallowed domain: {hop.hostname}"}, 403
+                    )
+
+            if resp is None or resp.status_code != 200:
+                code = resp.status_code if resp is not None else 502
+                # Surface the real upstream status instead of masking it as 502.
+                return JSONResponse(
+                    {"error": f"upstream returned {code}", "url": img_url},
+                    code if 400 <= code < 600 else 502,
+                )
 
             content_type = resp.headers.get("content-type", "image/jpeg")
-            # Stream the image back with caching headers
+            # Mirror upstream caching (immutable, 30d) instead of shortening to 24h.
+            out_headers = {
+                "Cache-Control": "public, max-age=2592000, immutable",
+                "X-Proxy": "image-proxy",
+            }
+            for h in ("etag", "last-modified"):
+                if h in resp.headers:
+                    out_headers[h.title()] = resp.headers[h]
+
             return Response(
                 content=resp.content,
                 media_type=content_type,
-                headers={
-                    "Cache-Control": "public, max-age=86400",  # cache 24h in browser
-                    "X-Proxy": "image-proxy",
-                },
+                headers=out_headers,
             )
     except httpx.TimeoutException:
         return JSONResponse({"error": "upstream timeout"}, 504)

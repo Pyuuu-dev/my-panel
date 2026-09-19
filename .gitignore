@@ -36,6 +36,16 @@ Thumbs.db
 # Secrets (if any)
 .env
 *.env
+!.env.example
+
+# Service configs contain live webhook URLs / credentials.
+# Track the .example templates instead.
+komik-scraper/config.yaml
+komiku-scraper/config.yaml
+otakudesu-scraper/config.yaml
+fruityblox-scraper/config.yaml
+gmaps-scraper/config.yaml
+!*/config.yaml.example
 
 # Temp
 /tmp/

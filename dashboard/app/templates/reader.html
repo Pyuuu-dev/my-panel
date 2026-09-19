@@ -73,7 +73,7 @@
 <!-- Reader -->
 <div class="reader-wrap">
   {% for img in images %}
-  <img src="/api/image-proxy?url={{ img|urlencode }}" alt="Page {{ loop.index }}" class="reader-img" loading="lazy" onerror="this.style.opacity='0.3';this.alt='Failed to load'">
+  <img src="/api/image-proxy?url={{ img|urlencode }}" data-origin="{{ img|e }}" alt="Page {{ loop.index }}" class="reader-img" loading="lazy">
   {% endfor %}
 </div>
 
@@ -108,6 +108,24 @@
 {% endif %}
 
 <script>
+// Image fallback: if the proxy fails, retry once against the origin CDN.
+// Safe because the CDN sends Access-Control-Allow-Origin:* and serves 200
+// without a Referer. A data-flag guards against an infinite error loop.
+document.addEventListener('error', function(e){
+  const el = e.target;
+  if (!el || el.tagName !== 'IMG' || !el.classList.contains('reader-img')) return;
+
+  const origin = el.dataset.origin;
+  if (origin && el.dataset.retried !== '1') {
+    el.dataset.retried = '1';
+    el.src = origin;
+    return;
+  }
+
+  el.style.opacity = '0.3';
+  el.alt = 'Failed to load';
+}, true); // capture: <img> error events do not bubble
+
 // Reading progress bar
 (function(){
   const bar = document.getElementById('progress');

@@ -217,6 +217,17 @@ apt install apache2
 git clone https://github.com/Pyuuu-dev/my-panel.git /opt/services
 cd /opt/services
 
+# Secrets — WAJIB sebelum start (panel menolak jalan tanpa ini)
+cp .env.example .env
+chmod 600 .env
+# Generate SECRET_KEY:
+python3 -c "import secrets; print(secrets.token_urlsafe(64))"
+# Lalu isi SECRET_KEY, SUPERVISOR_URL, dan DISCORD_WEBHOOK_URL di .env
+
+# Config per-service (berisi webhook, tidak ikut di-commit)
+cp komiku-scraper/config.yaml.example komiku-scraper/config.yaml
+cp komik-scraper/config.yaml.example komik-scraper/config.yaml
+
 # Setup virtual environments
 for service in dashboard komiku-scraper otakudesu-scraper fruityblox-scraper; do
   cd /opt/services/$service
@@ -235,6 +246,25 @@ supervisorctl reread && supervisorctl update
 # Setup Apache reverse proxy
 # Arahkan panel.yourdomain.com → localhost:8000
 ```
+
+### 🔐 Secrets
+Semua kredensial dibaca dari `/opt/services/.env` (chmod 600, di-`.gitignore`).
+Tidak ada secret yang hardcoded di source.
+
+| Variabel | Kegunaan |
+|---|---|
+| `SECRET_KEY` | Signing key JWT untuk sesi login panel |
+| `SUPERVISOR_URL` | Endpoint XML-RPC supervisor beserta kredensialnya |
+| `DISCORD_WEBHOOK_URL` | Webhook notifikasi scraper |
+
+Panel **fail-fast**: kalau `SECRET_KEY` atau `SUPERVISOR_URL` kosong, startup
+dibatalkan dengan pesan jelas — bukan diam-diam memakai nilai default.
+
+Mengganti `SECRET_KEY` akan meng-invalidasi semua sesi aktif (semua user
+harus login ulang). Password user tidak terpengaruh.
+
+`config.yaml` tiap service juga di-`.gitignore` karena memuat URL webhook;
+yang ikut ter-commit hanya `config.yaml.example`.
 
 ### Konfigurasi
 Setiap service punya `config.yaml` masing-masing:

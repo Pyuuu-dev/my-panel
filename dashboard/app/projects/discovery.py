@@ -32,7 +32,10 @@ sys.path.insert(0, "/opt/services/shared")
 import db as shared_db  # noqa: E402
 
 # ── Tunables ─────────────────────────────────────────────
-SUPERVISOR_URL = "http://127.0.0.1:9001/RPC2"
+# Credentials come from the environment (/opt/services/.env), never hardcoded.
+SUPERVISOR_URL = os.environ.get(
+    "SUPERVISOR_URL", "http://127.0.0.1:9001/RPC2"
+)
 APACHE_AVAILABLE = Path("/etc/apache2/sites-available")
 APACHE_ENABLED = Path("/etc/apache2/sites-enabled")
 

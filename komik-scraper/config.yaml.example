@@ -23,7 +23,7 @@ watchlist:
 - Became The Patron Of Villains
 - The Legendary Hero Is An Academy Honors Student
 webhook:
-  discord_url: https://discord.com/api/webhooks/REDACTED-ROTATED-WEBHOOK
+  discord_url: "https://discord.com/api/webhooks/REPLACE_ME"
   enabled: true
   notify_on_new_komik: false
   notify_on_scrape_done: false
