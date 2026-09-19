@@ -2533,6 +2533,28 @@ async def cache_page(request: Request, msg: str = Query(None)):
     })
 
 
+# Entries under /tmp that must never be deleted by the cache cleaner.
+# - opencode        : user workspace
+# - systemd-private-*: PrivateTmp mounts of running units. Deleting these breaks
+#                     `systemctl reload` with 226/NAMESPACE (see apache2).
+# - .X11-unix etc.  : well-known socket dirs, same set systemd-tmpfiles protects.
+TMP_KEEP_NAMES = [
+    "opencode",
+    "systemd-private-*",
+    ".X11-unix", ".ICE-unix", ".font-unix", ".XIM-unix", ".Test-unix",
+]
+
+
+def _clean_tmp_cmd() -> list[str]:
+    """Build a `find` argv that removes /tmp entries older than 1 day,
+    skipping everything in TMP_KEEP_NAMES."""
+    cmd = ["find", "/tmp", "-mindepth", "1", "-maxdepth", "1"]
+    for name in TMP_KEEP_NAMES:
+        cmd += ["-not", "-name", name]
+    cmd += ["-mtime", "+1", "-exec", "rm", "-rf", "{}", ";"]
+    return cmd
+
+
 @app.post("/server/cache/clean")
 async def cache_clean(request: Request, target: str = Form(...)):
     user = get_user(request)
@@ -2555,12 +2577,8 @@ async def cache_clean(request: Request, target: str = Form(...)):
                 subprocess.run(["journalctl", "--vacuum-size=20M"], capture_output=True, timeout=30)
                 results.append("Journal logs vacuumed to 20MB")
             elif t == "tmp":
-                # Only clean files older than 1 day, skip /tmp/opencode
-                subprocess.run(
-                    ["find", "/tmp", "-mindepth", "1", "-maxdepth", "1",
-                     "-not", "-name", "opencode", "-mtime", "+1", "-exec", "rm", "-rf", "{}", ";"],
-                    capture_output=True, timeout=30
-                )
+                # Only clean files older than 1 day; see TMP_KEEP_NAMES
+                subprocess.run(_clean_tmp_cmd(), capture_output=True, timeout=30)
                 results.append("Tmp files (>1 day) cleaned")
             elif t == "logs":
                 # Truncate large log files in /var/log
@@ -2580,11 +2598,7 @@ async def cache_clean(request: Request, target: str = Form(...)):
                 subprocess.run(["apt-get", "clean"], capture_output=True, timeout=30)
                 subprocess.run(["rm", "-rf", "/root/.cache/pip"], capture_output=True, timeout=30)
                 subprocess.run(["journalctl", "--vacuum-size=20M"], capture_output=True, timeout=30)
-                subprocess.run(
-                    ["find", "/tmp", "-mindepth", "1", "-maxdepth", "1",
-                     "-not", "-name", "opencode", "-mtime", "+1", "-exec", "rm", "-rf", "{}", ";"],
-                    capture_output=True, timeout=30
-                )
+                subprocess.run(_clean_tmp_cmd(), capture_output=True, timeout=30)
                 results.append("All caches cleaned")
         except Exception as e:
             results.append(f"Error cleaning {t}: {e}")

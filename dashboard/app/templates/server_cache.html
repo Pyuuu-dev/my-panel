@@ -45,7 +45,7 @@
   ('APT Cache', '/var/cache/apt/archives', 'package', cache.apt_cache, 'apt', '#fbbf24', 'Package .deb files yang sudah terinstall. Aman untuk dihapus.', 'Clean APT'),
   ('Pip Cache', '~/.cache/pip', 'code', cache.pip_cache, 'pip', '#3b82f6', 'Python package download cache. Aman dihapus, pip akan re-download jika perlu.', 'Clean Pip'),
   ('Journal Logs', 'systemd-journald', 'scroll-text', cache.journal, 'journal', '#a855f7', 'System journal logs. Akan di-vacuum ke 20MB, log lama dihapus.', 'Vacuum'),
-  ('Temp Files', '/tmp', 'folder', cache.tmp, 'tmp', '#10b981', 'File temporary >1 hari. Folder /tmp/opencode tidak akan dihapus.', 'Clean /tmp'),
+  ('Temp Files', '/tmp', 'folder', cache.tmp, 'tmp', '#10b981', 'File temporary >1 hari. Folder /tmp/opencode dan runtime systemd (systemd-private-*) dilindungi.', 'Clean /tmp'),
   ('System Logs', '/var/log', 'file-text', cache.var_log, 'logs', '#ef4444', 'Log files >10MB akan di-truncate ke 1MB. Log kecil tidak diubah.', 'Truncate'),
   ('Service Logs', '/opt/services/logs', 'cog', cache.svc_logs, 'svc_logs', '#06b6d4', 'Log scraper >5MB akan di-trim ke 500 baris terakhir.', 'Trim'),
 ] %}

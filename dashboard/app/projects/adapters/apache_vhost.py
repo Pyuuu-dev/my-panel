@@ -34,22 +34,37 @@ APACHECTL = shutil.which("apachectl") or "/usr/sbin/apachectl"
 SYSTEMCTL = shutil.which("systemctl") or "/bin/systemctl"
 
 
-def _apache_reload() -> tuple[int, str]:
-    """Restart apache via systemctl.
-
-    `systemctl reload` fails with status 226/NAMESPACE on this host because
-    PrivateTmp=true causes a mount namespace setup error when the reload is
-    triggered from outside systemd's own context. `systemctl restart` avoids
-    the namespace issue entirely and is reliably supported.
-    """
+def _run_systemctl(verb: str, timeout: int) -> tuple[int, str]:
     try:
         r = subprocess.run(
-            [SYSTEMCTL, "restart", "apache2"],
-            capture_output=True, text=True, timeout=30,
+            [SYSTEMCTL, verb, "apache2"],
+            capture_output=True, text=True, timeout=timeout,
         )
         return r.returncode, (r.stderr or r.stdout or "").strip()
     except (subprocess.TimeoutExpired, OSError) as e:
         return 1, str(e)
+
+
+def _apache_reload() -> tuple[int, str]:
+    """Apply vhost changes: graceful reload, falling back to restart.
+
+    `reload` is preferred because the dashboard itself is served through
+    Apache (ProxyPass -> 127.0.0.1:8000); a restart would drop the very
+    request that triggered it.
+
+    Reload can fail with 226/NAMESPACE if the unit's PrivateTmp directory
+    (/tmp/systemd-private-*-apache2.service-*) was deleted while the service
+    was running — systemd cannot re-enter the mount namespace to spawn
+    ExecReload. In that case a restart rebuilds the namespace and recovers.
+    """
+    rc, msg = _run_systemctl("reload", 20)
+    if rc == 0:
+        return rc, msg
+    reload_err = msg
+    rc, msg = _run_systemctl("restart", 30)
+    if rc == 0:
+        return 0, f"reload failed ({reload_err[:120]}), recovered via restart"
+    return rc, f"reload failed ({reload_err[:120]}); restart failed ({msg[:120]})"
 
 
 _RE_SERVERNAME = re.compile(r"^\s*ServerName\s+(\S+)", re.IGNORECASE | re.MULTILINE)
